@@ -1,0 +1,101 @@
+{
+  "synthetic": true,
+  "patients": [
+    {
+      "histno": "90000001",
+      "name": "測試甲",
+      "ward": "D101",
+      "bed": "01",
+      "age": "67",
+      "sex": "M",
+      "case_no": "DEMO-A01",
+      "records": [
+        {
+          "source_type": "admission_note",
+          "title": "最新入院病歷",
+          "source_record_id": "demo-a-adm",
+          "observed_at": "2026-08-25T10:00:00+08:00",
+          "content": "TODO: follow blood culture; reassess oxygen requirement; confirm home anticoagulant.\nA 67-year-old man with hypertension and atrial fibrillation presented with productive cough and dyspnea for 3 days. He denied chest pain."
+        },
+        {
+          "source_type": "progress_note",
+          "title": "近期 Progress Notes",
+          "source_record_id": "demo-a-prg",
+          "observed_at": "2026-08-27T07:30:00+08:00",
+          "content": "S: Dyspnea improved. O: T 37.4 C, BP 118/68 mmHg, HR 92 bpm, SpO2 94% with nasal cannula 2 L/min. A: Community-acquired pneumonia, improving. P: Continue antibiotics and wean oxygen as tolerated."
+        },
+        {
+          "source_type": "lab_chemistry",
+          "title": "生化趨勢",
+          "source_record_id": "demo-a-chem",
+          "observed_at": "2026-08-27T06:10:00+08:00",
+          "content": "Date\tNa\tK\tCr\tCRP\n2026-08-25\t137\t3.8\t1.0\t15.2\n2026-08-26\t138\t3.6\t1.1\t11.4\n2026-08-27\t139\t3.7\t1.0\t7.8"
+        },
+        {
+          "source_type": "lab_cbc",
+          "title": "CBC 趨勢",
+          "source_record_id": "demo-a-cbc",
+          "observed_at": "2026-08-27T06:10:00+08:00",
+          "content": "Date\tWBC\tHb\tPlt\n2026-08-25\t15.1\t12.8\t228\n2026-08-26\t12.3\t12.2\t235\n2026-08-27\t9.8\t12.0\t241"
+        },
+        {
+          "source_type": "medication",
+          "title": "目前用藥",
+          "source_record_id": "demo-a-med",
+          "content": "ceftriaxone 2 g IV QD\nazithromycin 500 mg PO QD\napixaban 5 mg PO BID"
+        },
+        {
+          "source_type": "report_index",
+          "title": "近期報告索引",
+          "source_record_id": "demo-a-report",
+          "observed_at": "2026-08-27T08:20:00+08:00",
+          "status": "final",
+          "content": "Chest radiograph: interval improvement of right lower lung opacity.\nBlood culture: no growth to date, preliminary."
+        }
+      ]
+    },
+    {
+      "histno": "90000002",
+      "name": "測試乙",
+      "ward": "D101",
+      "bed": "02",
+      "age": "54",
+      "sex": "F",
+      "case_no": "DEMO-A02",
+      "records": [
+        {"source_type": "admission_note", "title": "最新入院病歷", "source_record_id": "demo-b-adm", "observed_at": "2026-08-26T12:00:00+08:00", "content": "TODO: trend hemoglobin; clarify last NSAID dose.\nA 54-year-old woman was admitted for melena and dizziness."},
+        {"source_type": "progress_note", "title": "近期 Progress Notes", "source_record_id": "demo-b-prg", "observed_at": "2026-08-27T08:00:00+08:00", "content": "No recurrent melena overnight. BP 106/64 mmHg, HR 86 bpm. Awaiting endoscopy."},
+        {"source_type": "lab_cbc", "title": "CBC 趨勢", "source_record_id": "demo-b-cbc", "observed_at": "2026-08-27T06:20:00+08:00", "content": "Date\tHb\tPlt\n2026-08-26\t9.4\t206\n2026-08-27\t8.8\t198"},
+        {"source_type": "report_index", "title": "近期報告索引", "source_record_id": "demo-b-report", "status": "pending", "content": "Upper endoscopy report: pending."}
+      ]
+    },
+    {
+      "histno": "90000003",
+      "name": "測試丙",
+      "ward": "D101",
+      "bed": "03",
+      "age": "72",
+      "sex": "M",
+      "case_no": "DEMO-A03",
+      "records": [
+        {"source_type": "admission_note", "title": "最新入院病歷", "source_record_id": "demo-c-adm", "observed_at": "2026-08-24T15:00:00+08:00", "content": "TODO: daily weight; monitor creatinine after diuresis.\nA 72-year-old man with heart failure was admitted for worsening leg edema."},
+        {"source_type": "lab_chemistry", "title": "生化趨勢", "source_record_id": "demo-c-chem", "observed_at": "2026-08-27T06:30:00+08:00", "content": "Date\tCr\tK\n2026-08-25\t1.4\t4.2\n2026-08-26\t1.6\t3.8\n2026-08-27\t1.8\t3.5"}
+      ]
+    },
+    {"histno": "90000004", "name": "測試丁", "ward": "D101", "bed": "04", "age": "63", "sex": "F", "case_no": "DEMO-A04", "records": [{"source_type": "admission_note", "title": "最新入院病歷", "source_record_id": "demo-04", "content": "TODO: reconcile insulin regimen. Synthetic diabetes admission."}]},
+    {"histno": "90000005", "name": "測試戊", "ward": "D101", "bed": "05", "age": "45", "sex": "M", "case_no": "DEMO-A05", "records": [{"source_type": "progress_note", "title": "近期 Progress Notes", "source_record_id": "demo-05", "content": "Synthetic cellulitis case; fever resolved."}]},
+    {"histno": "90000006", "name": "測試己", "ward": "D101", "bed": "06", "age": "81", "sex": "F", "case_no": "DEMO-A06", "records": [{"source_type": "report_index", "title": "近期報告索引", "source_record_id": "demo-06", "status": "final", "content": "Synthetic echocardiography report finalized."}]},
+    {"histno": "90000007", "name": "測試庚", "ward": "D101", "bed": "07", "age": "59", "sex": "M", "case_no": "DEMO-A07", "records": [{"source_type": "admission_note", "title": "最新入院病歷", "source_record_id": "demo-07", "content": "TODO: follow sputum culture. Synthetic COPD exacerbation."}]},
+    {"histno": "90000008", "name": "測試辛", "ward": "D101", "bed": "08", "age": "70", "sex": "F", "case_no": "DEMO-A08", "records": [{"source_type": "lab_chemistry", "title": "生化趨勢", "source_record_id": "demo-08", "content": "Na 128 then 131 mmol/L in synthetic data."}]},
+    {"histno": "90000009", "name": "測試壬", "ward": "D101", "bed": "09", "age": "38", "sex": "M", "case_no": "DEMO-A09", "records": [{"source_type": "progress_note", "title": "近期 Progress Notes", "source_record_id": "demo-09", "content": "Synthetic pancreatitis case, tolerating diet."}]},
+    {"histno": "90000010", "name": "測試癸", "ward": "D101", "bed": "10", "age": "76", "sex": "F", "case_no": "DEMO-A10", "records": [{"source_type": "medication", "title": "目前用藥", "source_record_id": "demo-10", "content": "Synthetic medication list."}]},
+    {"histno": "90000011", "name": "範例甲", "ward": "D101", "bed": "11", "age": "66", "sex": "M", "case_no": "DEMO-A11", "records": [{"source_type": "admission_note", "title": "最新入院病歷", "source_record_id": "demo-11", "content": "TODO: confirm pathology. Synthetic case."}]},
+    {"histno": "90000012", "name": "範例乙", "ward": "D101", "bed": "12", "age": "57", "sex": "F", "case_no": "DEMO-A12", "records": [{"source_type": "report_index", "title": "近期報告索引", "source_record_id": "demo-12", "status": "pending", "content": "Synthetic pathology pending."}]},
+    {"histno": "90000013", "name": "範例丙", "ward": "D101", "bed": "13", "age": "49", "sex": "M", "case_no": "DEMO-A13", "records": [{"source_type": "progress_note", "title": "近期 Progress Notes", "source_record_id": "demo-13", "content": "Synthetic fever evaluation."}]},
+    {"histno": "90000014", "name": "範例丁", "ward": "D101", "bed": "14", "age": "74", "sex": "F", "case_no": "DEMO-A14", "records": [{"source_type": "lab_cbc", "title": "CBC 趨勢", "source_record_id": "demo-14", "content": "Synthetic WBC trend."}]},
+    {"histno": "90000015", "name": "範例戊", "ward": "D101", "bed": "15", "age": "62", "sex": "M", "case_no": "DEMO-A15", "records": [{"source_type": "admission_note", "title": "最新入院病歷", "source_record_id": "demo-15", "content": "TODO: assess discharge oxygen need. Synthetic case."}]},
+    {"histno": "90000016", "name": "範例己", "ward": "D101", "bed": "16", "age": "69", "sex": "F", "case_no": "DEMO-A16", "records": [{"source_type": "report_index", "title": "近期報告索引", "source_record_id": "demo-16", "status": "final", "content": "Synthetic CT report finalized."}]},
+    {"histno": "90000017", "name": "範例庚", "ward": "D101", "bed": "17", "age": "52", "sex": "M", "case_no": "DEMO-A17", "records": [{"source_type": "progress_note", "title": "近期 Progress Notes", "source_record_id": "demo-17", "content": "Synthetic postoperative observation."}]},
+    {"histno": "90000018", "name": "範例辛", "ward": "D101", "bed": "18", "age": "78", "sex": "F", "case_no": "DEMO-A18", "records": [{"source_type": "admission_note", "title": "最新入院病歷", "source_record_id": "demo-18", "content": "TODO: family meeting. Synthetic geriatric admission."}]}
+  ]
+}

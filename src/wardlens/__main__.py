@@ -16,6 +16,12 @@ def main(argv: list[str] | None = None) -> None:
         run_self_test()
         print("WardLens packaged self-test passed.")
         return
+    if "--ui-self-test" in arguments:
+        from wardlens.selftest import run_ui_self_test
+
+        run_ui_self_test()
+        print("WardLens packaged UI self-test passed.")
+        return
     try:
         from wardlens.app import main as app_main
     except ModuleNotFoundError as exc:

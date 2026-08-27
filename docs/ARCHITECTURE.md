@@ -18,7 +18,25 @@ exact outbound preview + SHA-256
         └────────► OpenRouter ZDR endpoint ─► selected LLM
 ```
 
-No clinical record cache, raw prompt log, response log, EMR write endpoint, Selenium driver, browser extension, or local web server exists in the MVP.
+No clinical record cache, raw prompt log, response log, EMR write endpoint, Selenium driver, browser extension, or long-lived local web server exists in the MVP.
+
+The only local listener is an ephemeral `127.0.0.1` HTTP callback created during an explicit OpenRouter OAuth PKCE login. It receives a one-time authorization code, never clinical content, and closes immediately after success or timeout. No listener exists during normal EMR or LLM use.
+
+## Developer configuration flow
+
+```text
+Built-in model profiles/prompts
+        │ explicit developer-mode edit/import
+        ▼
+validated non-secret settings.json (%LOCALAPPDATA%/WardLens)
+        │
+        ├── model ID / reasoning / max tokens
+        └── workflow-specific system prompt
+                    │
+                    └── full content remains visible in exact outbound preview
+```
+
+The developer JSON schema accepts only known profile slots and prompt workflows. It cannot carry an API key or change the OpenRouter transport origin. Model IDs are selected from the live catalog or validated as `provider/model`; per-request ZDR checks remain authoritative.
 
 ## Trust boundaries
 

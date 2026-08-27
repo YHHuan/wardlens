@@ -13,10 +13,13 @@ from typing import Any
 
 from wardlens import __version__
 from wardlens.config import DEFAULT_PROFILES, AppSettings, app_data_dir
+from wardlens.developer import DeveloperSettingsDialog
 from wardlens.emr.base import EMRError
 from wardlens.emr.demo import DemoEMRAdapter
 from wardlens.emr.vgh import VGHReadOnlyAdapter
+from wardlens.llm.oauth import OpenRouterOAuth
 from wardlens.llm.openrouter import OpenRouterError
+from wardlens.llm.prompts import PromptBuilder
 from wardlens.models import PatientBundle, PatientListResult, PatientSummary
 from wardlens.security.audit import HashOnlyAuditLog
 from wardlens.security.deidentify import DataLeakRisk
@@ -41,7 +44,10 @@ class WardLensApp:
         self.settings.save()
 
         self.audit = HashOnlyAuditLog(app_data_dir() / "audit.jsonl")
-        self.ai = AIWorkflowService(audit=self.audit)
+        self.ai = AIWorkflowService(
+            builder=PromptBuilder(overrides=self.settings.custom_prompts), audit=self.audit
+        )
+        self.oauth = OpenRouterOAuth()
         self.secret_store = CredentialSecretStore()
         self.adapter = self._new_adapter()
         self.patients: dict[str, PatientSummary] = {}
@@ -54,6 +60,7 @@ class WardLensApp:
         self._busy = False
         self._cancel_event = threading.Event()
         self._clipboard_snapshot = ""
+        self._developer_dialog: DeveloperSettingsDialog | None = None
 
         self._build_variables()
         self._configure_root()
@@ -85,6 +92,9 @@ class WardLensApp:
         self.external_ai_var = tk.BooleanVar(value=self.settings.external_ai_enabled)
         self.policy_ack_var = tk.BooleanVar(value=self.settings.privacy_acknowledged)
         self.zdr_var = tk.BooleanVar(value=self.settings.require_zdr)
+        self.developer_mode_var = tk.BooleanVar(value=self.settings.developer_mode)
+        self.key_status_var = tk.StringVar(value="API key：尚未檢查")
+        self.developer_status_var = tk.StringVar()
 
     def _configure_root(self) -> None:
         self.root.title(f"WardLens {__version__}｜住院查房助手")
@@ -258,7 +268,7 @@ class WardLensApp:
         profile.pack(side=tk.LEFT, padx=(4, 8))
         ttk.Label(
             controls,
-            text="fast=Terra/low；deep=Sol/high；也可選 Gemini Flash 或 Claude",
+            text="實際模型 ID／reasoning 請見「隱私與模型」；開發者模式可調整",
             style="Muted.TLabel",
         ).pack(side=tk.LEFT)
 
@@ -399,24 +409,47 @@ class WardLensApp:
 
         key_row = ttk.Frame(parent)
         key_row.pack(fill=tk.X, pady=(15, 8))
-        ttk.Button(key_row, text="設定／驗證 OpenRouter API key", command=self._set_api_key).pack(
+        ttk.Button(
+            key_row,
+            text="用瀏覽器登入 OpenRouter（推薦）",
+            command=self._connect_openrouter,
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            key_row, text="從剪貼簿貼上一次", command=self._paste_api_key_from_clipboard
+        ).pack(side=tk.LEFT, padx=8)
+        ttk.Button(key_row, text="手動貼上…", command=self._set_api_key).pack(
+            side=tk.LEFT, padx=(0, 8)
+        )
+        ttk.Button(key_row, text="移除本機 API key", command=self._delete_api_key).pack(
             side=tk.LEFT
         )
-        ttk.Button(key_row, text="刪除已存 API key", command=self._delete_api_key).pack(
-            side=tk.LEFT, padx=8
-        )
+        ttk.Label(parent, textvariable=self.key_status_var, style="Muted.TLabel").pack(anchor="w")
 
         ttk.Separator(parent).pack(fill=tk.X, pady=12)
-        ttk.Label(parent, text="預設模型路由", style="Title.TLabel").pack(anchor="w")
-        rows = []
-        for key, profile in DEFAULT_PROFILES.items():
-            rows.append(
-                f"{key:16}  {profile.model:31}  reasoning={profile.reasoning_effort:5}  {profile.intended_use}"
-            )
-        model_box = ScrolledText(parent, height=9, wrap=tk.NONE, font=("Consolas", 9))
-        model_box.pack(fill=tk.X, pady=(6, 0))
-        self._replace_text(model_box, "\n".join(rows))
-        model_box.configure(state=tk.DISABLED)
+        developer_row = ttk.Frame(parent)
+        developer_row.pack(fill=tk.X)
+        ttk.Checkbutton(
+            developer_row,
+            text="啟用開發者模式",
+            variable=self.developer_mode_var,
+            command=self._toggle_developer_mode,
+        ).pack(side=tk.LEFT)
+        self.developer_button = ttk.Button(
+            developer_row,
+            text="調整模型／reasoning／tokens／prompts…",
+            command=self._open_developer_settings,
+        )
+        self.developer_button.pack(side=tk.LEFT, padx=10)
+        ttk.Label(developer_row, textvariable=self.developer_status_var, style="Muted.TLabel").pack(
+            side=tk.LEFT
+        )
+
+        ttk.Label(parent, text="目前模型路由", style="Title.TLabel").pack(anchor="w", pady=(10, 0))
+        self.model_box = ScrolledText(parent, height=7, wrap=tk.NONE, font=("Consolas", 9))
+        self.model_box.pack(fill=tk.X, pady=(6, 0))
+        self.model_box.configure(state=tk.DISABLED)
+        self._refresh_model_summary()
+        self._apply_developer_state()
         ttk.Label(
             parent,
             text=(
@@ -838,6 +871,47 @@ class WardLensApp:
         self.settings.require_zdr = self.zdr_var.get()
         self.settings.save()
 
+    def _connect_openrouter(self) -> None:
+        if not messagebox.askyesno(
+            "OpenRouter 瀏覽器登入",
+            "將開啟 OpenRouter 官方登入頁。授權完成後 WardLens 會建立／取得專用 key、驗證，並存入 Windows Credential Manager；不必複製或手打。日後可在 OpenRouter 帳戶撤銷該 key。繼續？",
+        ):
+            return
+
+        def task() -> str:
+            key = self.oauth.connect()
+            return self._verify_and_store_api_key(key)
+
+        self._run_async("等待 OpenRouter 瀏覽器授權…", task, self._api_key_saved)
+
+    def _paste_api_key_from_clipboard(self) -> None:
+        try:
+            key = self.root.clipboard_get().strip()
+        except tk.TclError:
+            messagebox.showerror("剪貼簿沒有 key", "請先在 OpenRouter 複製 API key。")
+            return
+        if not key.startswith("sk-or-") or len(key) < 30:
+            messagebox.showerror("剪貼簿沒有 key", "剪貼簿內容不像 OpenRouter API key。")
+            return
+        if not messagebox.askyesno(
+            "從剪貼簿匯入",
+            "將驗證剪貼簿中的 OpenRouter key，存入 Windows Credential Manager，成功後立即清除剪貼簿。繼續？",
+        ):
+            return
+        try:
+            if self.root.clipboard_get().strip() == key:
+                self.root.clipboard_clear()
+        except tk.TclError:
+            pass
+
+        def task() -> str:
+            return self._verify_and_store_api_key(key)
+
+        def success(value: str) -> None:
+            self._api_key_saved(value)
+
+        self._run_async("正在驗證剪貼簿中的 OpenRouter key…", task, success)
+
     def _set_api_key(self) -> None:
         key = simpledialog.askstring(
             "OpenRouter API key",
@@ -849,20 +923,27 @@ class WardLensApp:
             return
         key = key.strip()
 
-        def task() -> str:
-            self.ai.client.verify_key(key)
-            self.secret_store.set("openrouter_api_key", key)
-            return key
+        self._run_async(
+            "正在驗證 OpenRouter API key…",
+            lambda: self._verify_and_store_api_key(key),
+            self._api_key_saved,
+        )
 
-        def success(value: str) -> None:
-            self._session_api_key = value
-            messagebox.showinfo("API key", "驗證成功，已存入作業系統憑證庫。")
+    def _verify_and_store_api_key(self, key: str) -> str:
+        value = key.strip()
+        self.ai.client.verify_key(value)
+        self.secret_store.set("openrouter_api_key", value)
+        return value
 
-        self._run_async("正在驗證 OpenRouter API key…", task, success)
+    def _api_key_saved(self, value: str) -> None:
+        self._session_api_key = value
+        self.key_status_var.set("API key：已驗證並存入 Windows Credential Manager")
+        messagebox.showinfo("API key", "設定完成；之後不必再次輸入長 key。")
 
     def _delete_api_key(self) -> None:
         if not messagebox.askyesno(
-            "刪除 API key", "確定從作業系統憑證庫刪除 WardLens 的 OpenRouter key？"
+            "移除本機 API key",
+            "確定從作業系統憑證庫移除 WardLens 的 OpenRouter key？這不會撤銷 OpenRouter 帳戶中的 key；若不再使用，請另至 OpenRouter key 管理頁撤銷。",
         ):
             return
         try:
@@ -871,6 +952,7 @@ class WardLensApp:
         except Exception as exc:
             self._show_error(exc)
             return
+        self.key_status_var.set("API key：未設定")
         messagebox.showinfo("API key", "已刪除。")
 
     def _get_api_key(self) -> str:
@@ -881,7 +963,63 @@ class WardLensApp:
         except SecretStoreError as exc:
             self._show_error(exc)
             return ""
+        self.key_status_var.set(
+            "API key：已存於作業系統憑證庫" if self._session_api_key else "API key：未設定"
+        )
         return self._session_api_key
+
+    def _toggle_developer_mode(self) -> None:
+        enabled = self.developer_mode_var.get()
+        if enabled and not messagebox.askyesno(
+            "啟用開發者模式",
+            "自訂模型與 prompt 會改變臨床草稿行為。變更後必須先用合成資料測試，且仍須逐次閱讀 outbound 預覽。啟用？",
+        ):
+            self.developer_mode_var.set(False)
+            enabled = False
+        self.settings.developer_mode = enabled
+        self.settings.save()
+        self._apply_developer_state()
+
+    def _apply_developer_state(self) -> None:
+        enabled = self.developer_mode_var.get()
+        self.developer_button.configure(state=tk.NORMAL if enabled else tk.DISABLED)
+        overrides = len(self.settings.custom_profiles) + len(self.settings.custom_prompts)
+        self.developer_status_var.set(
+            f"已套用 {overrides} 項自訂值" if overrides else "目前使用內建值"
+        )
+
+    def _open_developer_settings(self) -> None:
+        if not self.developer_mode_var.get():
+            messagebox.showerror("開發者模式未啟用", "請先勾選啟用開發者模式。")
+            return
+        self._developer_dialog = DeveloperSettingsDialog(
+            self.root,
+            settings=self.settings,
+            client=self.ai.client,
+            on_saved=self._developer_settings_saved,
+        )
+
+    def _developer_settings_saved(self) -> None:
+        self.ai.builder = PromptBuilder(overrides=self.settings.custom_prompts)
+        self.ai_prepared = None
+        self.emergency_prepared = None
+        self.ai_preview_status_var.set("開發者設定已變更；必須重新建立預覽")
+        self.emergency_preview_status_var.set("開發者設定已變更；必須重新建立預覽")
+        self._replace_text(self.ai_preview_text, "")
+        self._replace_text(self.emergency_preview_text, "")
+        self._refresh_model_summary()
+        self._apply_developer_state()
+
+    def _refresh_model_summary(self) -> None:
+        rows = []
+        for key, default in DEFAULT_PROFILES.items():
+            profile = self.settings.profile(key)
+            marker = " *custom" if key in self.settings.custom_profiles else ""
+            rows.append(
+                f"{key:16}  {profile.model:31}  reasoning={profile.reasoning_effort:6}  "
+                f"tokens={profile.max_tokens:5}{marker}  {default.intended_use}"
+            )
+        self._replace_text(self.model_box, "\n".join(rows))
 
     def _cancel_generation(self) -> None:
         self._cancel_event.set()

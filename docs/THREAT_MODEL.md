@@ -14,6 +14,7 @@
 |---|---|---|
 | PHI sent to cloud | cloud off by default; deterministic redaction; residual scan; exact preview; hash equality; per-request confirmation | narrative can contain indirect identifiers or rare-disease combinations |
 | Key extracted from EXE | no embedded key/password; OS credential vault | compromised Windows account can access the vault |
+| Long key copied or mistyped | OAuth PKCE browser login; one-time loopback code; clipboard fallback clears immediately | compromised browser/account/Windows session remains able to obtain or use keys |
 | EMR password left on disk | session-only variable; UI clears password field; no credential log | process-memory compromise remains possible |
 | Prompt injection in chart | source blocks escaped and labelled untrusted; fixed system prompt | models are probabilistic; source review remains required |
 | Empty scrape treated as normal | expected selectors, source status, declared/fetched reconciliation, warnings | live HTML variants need hospital pilot fixtures |
@@ -22,11 +23,14 @@
 | Clipboard sync leaks data | only deidentified prompt; warning; conditional auto-clear | cloud clipboard may sync before clear |
 | AI draft copied as fact | source markers, visible warning, no automatic EMR write | clinician can still fail to review |
 | Supply-chain or binary reputation | source + CI tests + hashes + dual artifacts; optional trusted signing | unsigned first release may be blocked |
+| Unsafe developer configuration | explicit mode and warning; strict JSON schema; bounded prompts/tokens; fixed OpenRouter origin; preview invalidated after edits | a clinician can still author a clinically unsafe prompt or choose a weak model |
 
 ## Deliberate non-features
 
 - no hardcoded shared API key or password;
 - no proxy that accepts a short shared password;
+- no API key in developer export/import files;
+- no arbitrary LLM host override through developer mode;
 - no Defender/SmartScreen bypass instructions;
 - no automatic order placement or note submission;
 - no persistent clinical cache;

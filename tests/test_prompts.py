@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from wardlens.emr.demo import DemoEMRAdapter
-from wardlens.llm.prompts import PromptEnvelope, PromptFormatError
+from wardlens.llm.prompts import PromptBuilder, PromptEnvelope, PromptFormatError
 from wardlens.services.ai import AIWorkflowService
 
 
@@ -49,3 +49,10 @@ def test_emergency_requires_current_event() -> None:
 def test_prompt_envelope_rejects_modified_markers() -> None:
     with pytest.raises(PromptFormatError):
         PromptEnvelope.parse("SYSTEM: changed")
+
+
+def test_prompt_builder_uses_workflow_specific_override() -> None:
+    custom = "A" * 100
+    builder = PromptBuilder(overrides={"qa": custom})
+    assert builder.system_prompt("qa") == custom
+    assert builder.system_prompt("rounding") != custom

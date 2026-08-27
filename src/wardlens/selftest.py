@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 
 import keyring
 from docx import Document
@@ -26,3 +29,23 @@ def run_self_test() -> None:
     # its entry-point metadata can load. It does not create a credential.
     if os.name == "nt":
         keyring.get_password("WardLens-Packaged-SelfTest", "nonexistent")
+
+
+def run_ui_self_test() -> None:
+    """Construct every Tk widget once; intended for the Windows CI runner."""
+
+    import tkinter as tk
+
+    from wardlens.app import WardLensApp
+
+    with tempfile.TemporaryDirectory(prefix="wardlens-ui-selftest-") as directory:
+        state_dir = Path(directory)
+        with (
+            patch("wardlens.config.app_data_dir", return_value=state_dir),
+            patch("wardlens.app.app_data_dir", return_value=state_dir),
+        ):
+            root = tk.Tk()
+            root.withdraw()
+            app = WardLensApp(root, force_demo=True)
+            root.update_idletasks()
+            app._on_close()

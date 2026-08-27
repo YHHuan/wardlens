@@ -11,6 +11,7 @@ if (-not $SkipTests) {
     python -m ruff check .
     python -m pytest
 }
+python -m wardlens --ui-self-test
 
 $ReleaseDir = Join-Path $ProjectRoot "dist\release"
 $OneDirDist = Join-Path $ProjectRoot "dist\onedir"
@@ -51,10 +52,26 @@ if ($env:WARDLENS_PFX_BASE64 -and $env:WARDLENS_PFX_PASSWORD) {
     }
 }
 
-$OneFileProcess = Start-Process -FilePath (Join-Path $ReleaseDir "WardLens-OneFile.exe") -ArgumentList "--self-test" -Wait -PassThru
-if ($OneFileProcess.ExitCode -ne 0) { throw "One-file packaged self-test failed." }
-$OneDirProcess = Start-Process -FilePath (Join-Path $OneDirDist "WardLens\WardLens.exe") -ArgumentList "--self-test" -Wait -PassThru
-if ($OneDirProcess.ExitCode -ne 0) { throw "Onedir packaged self-test failed." }
+function Invoke-PackagedSelfTest {
+    param(
+        [string]$Executable,
+        [string]$Argument,
+        [string]$Label
+    )
+    $Process = Start-Process -FilePath $Executable -ArgumentList $Argument -PassThru
+    if (-not $Process.WaitForExit(30000)) {
+        Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+        throw "$Label timed out."
+    }
+    if ($Process.ExitCode -ne 0) { throw "$Label failed with exit code $($Process.ExitCode)." }
+}
+
+$OneFileExe = Join-Path $ReleaseDir "WardLens-OneFile.exe"
+$OneDirExe = Join-Path $OneDirDist "WardLens\WardLens.exe"
+Invoke-PackagedSelfTest -Executable $OneFileExe -Argument "--self-test" -Label "One-file packaged self-test"
+Invoke-PackagedSelfTest -Executable $OneFileExe -Argument "--ui-self-test" -Label "One-file packaged UI self-test"
+Invoke-PackagedSelfTest -Executable $OneDirExe -Argument "--self-test" -Label "Onedir packaged self-test"
+Invoke-PackagedSelfTest -Executable $OneDirExe -Argument "--ui-self-test" -Label "Onedir packaged UI self-test"
 
 $PackageDir = Join-Path $ProjectRoot "dist\package"
 if (Test-Path $PackageDir) { Remove-Item -Recurse -Force $PackageDir }

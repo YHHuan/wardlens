@@ -62,11 +62,17 @@ class PromptBuilder:
         "qa": "rounding_review_zh_tw.txt",
     }
 
+    def __init__(self, overrides: dict[str, str] | None = None) -> None:
+        self._overrides = dict(overrides or {})
+
     def system_prompt(self, workflow: str) -> str:
         try:
             filename = self._prompt_files[workflow]
         except KeyError as exc:
             raise ValueError(f"Unknown workflow: {workflow}") from exc
+        custom = self._overrides.get(workflow, "").strip()
+        if custom:
+            return custom
         path = files("wardlens").joinpath(f"resources/prompts/{filename}")
         return path.read_text(encoding="utf-8").strip()
 

@@ -8,7 +8,7 @@ Run from a clean Windows checkout:
 .\scripts\build_windows.ps1
 ```
 
-The script runs lint/tests, builds one-file and onedir variants, zips documentation, records installed dependency versions, and emits SHA-256 hashes under `dist\release`.
+The script runs lint/tests, constructs the complete Tk UI in a temporary state directory, builds one-file and onedir variants, runs resource/credential-backend and UI self-tests against both packages with a timeout, zips documentation, records installed dependency versions, and emits SHA-256 hashes under `dist\release`.
 
 ## Signing
 
@@ -31,4 +31,4 @@ For CI, prefer an identity-backed signing service over storing a reusable PFX. A
 4. GitHub Actions builds on a Windows runner and attaches both packages plus `SHA256SUMS.txt`.
 5. Download artifacts, verify hashes on a separate machine, scan, then copy the release ZIP to the approved Drive folder.
 
-Never publish `.env`, API keys, EMR credentials, raw HTML, prompts, responses, patient lists, screenshots or audit files.
+Never publish `.env`, API keys, EMR credentials, raw HTML, responses, patient lists, screenshots or audit files. Built-in prompts are source-controlled; user-exported developer JSON may contain full custom prompts and must be reviewed for accidentally pasted clinical data before sharing.

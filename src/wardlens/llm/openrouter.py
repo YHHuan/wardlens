@@ -57,16 +57,45 @@ class OpenRouterClient:
     def ensure_zdr_available(self, model: str) -> None:
         now = time.monotonic()
         if self._zdr_models is None or now - self._zdr_checked_at > 900:
-            try:
-                response = self.session.get(f"{self.base_url}/endpoints/zdr", timeout=(10, 30))
-                response.raise_for_status()
-                entries = response.json().get("data", [])
-                self._zdr_models = {str(entry.get("model_id", "")) for entry in entries}
-                self._zdr_checked_at = now
-            except (requests.RequestException, ValueError, AttributeError) as exc:
-                raise OpenRouterError("無法確認 ZDR endpoint，依 fail-closed 原則不送出。") from exc
+            self._refresh_zdr_models(now)
         if model not in self._zdr_models:
             raise OpenRouterError(f"模型 {model} 目前找不到 ZDR endpoint，已封鎖送出。")
+
+    def available_models(self, *, zdr_only: bool = True) -> list[str]:
+        """Return live model IDs for the developer picker; no clinical data is sent."""
+
+        if zdr_only:
+            self._refresh_zdr_models(time.monotonic())
+            return sorted(model for model in self._zdr_models or set() if model)
+        try:
+            response = self.session.get(f"{self.base_url}/models", timeout=(10, 30))
+            response.raise_for_status()
+            entries = response.json().get("data", [])
+            if not isinstance(entries, list):
+                raise ValueError("models.data is not a list")
+            return sorted(
+                {
+                    str(entry.get("id", ""))
+                    for entry in entries
+                    if isinstance(entry, dict) and entry.get("id")
+                }
+            )
+        except (requests.RequestException, ValueError, AttributeError) as exc:
+            raise OpenRouterError("無法取得 OpenRouter 最新模型清單。") from exc
+
+    def _refresh_zdr_models(self, now: float) -> None:
+        try:
+            response = self.session.get(f"{self.base_url}/endpoints/zdr", timeout=(10, 30))
+            response.raise_for_status()
+            entries = response.json().get("data", [])
+            if not isinstance(entries, list):
+                raise ValueError("endpoints.data is not a list")
+            self._zdr_models = {
+                str(entry.get("model_id", "")) for entry in entries if isinstance(entry, dict)
+            }
+            self._zdr_checked_at = now
+        except (requests.RequestException, ValueError, AttributeError) as exc:
+            raise OpenRouterError("無法確認 ZDR endpoint，依 fail-closed 原則不送出。") from exc
 
     def complete(
         self,

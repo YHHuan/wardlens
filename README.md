@@ -2,7 +2,7 @@
 
 WardLens 是給台灣 PGY／住院醫師使用的 Windows 查房輔助工具。它以唯讀方式整理 VGH EMR 病人清單與選取病人的 admission note、progress note、用藥、檢驗趨勢及報告索引，再由使用者決定是否把「先去識別、再人工預覽」的內容送往 OpenRouter。
 
-> 狀態：`v0.1.0` 是安全導向 MVP。Demo 與離線測試可用；真實 VGH adapter 仍須在院內網路以合成／授權測試病例完成 pilot。它不是已核准的醫療器材，也不應自動寫回 EMR。
+> 狀態：`v0.1.1` 是安全導向 MVP。Demo 與離線測試可用；真實 VGH adapter 仍須在院內網路以合成／授權測試病例完成 pilot。它不是已核准的醫療器材，也不應自動寫回 EMR。
 
 ## 目前功能
 

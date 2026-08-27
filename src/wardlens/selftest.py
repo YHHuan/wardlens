@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+
+import keyring
 from docx import Document
 
 from wardlens.emr.demo import DemoEMRAdapter
@@ -19,3 +22,7 @@ def run_self_test() -> None:
     if "90000001" in prepared.preview.text or "測試甲" in prepared.preview.text:
         raise RuntimeError("De-identification package smoke test failed.")
     Document()
+    # Read-only lookup validates that the packaged Windows keyring backend and
+    # its entry-point metadata can load. It does not create a credential.
+    if os.name == "nt":
+        keyring.get_password("WardLens-Packaged-SelfTest", "nonexistent")

@@ -27,6 +27,7 @@ from wardlens.security.secrets import CredentialSecretStore, SecretStoreError
 from wardlens.services.ai import AIWorkflowService, PreparedRequest
 from wardlens.services.export import export_patient_list_csv, export_patient_list_docx
 from wardlens.services.summary import render_bundle_overview
+from wardlens.startup import install_tk_exception_handler
 
 WORKFLOW_LABELS = {
     "查房重點": "rounding",
@@ -1123,5 +1124,6 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     root = tk.Tk()
+    install_tk_exception_handler(root)
     WardLensApp(root, force_demo=args.demo)
     root.mainloop()

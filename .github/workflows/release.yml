@@ -12,19 +12,16 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14.7"
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev]"
       - shell: pwsh
-        env:
-          WARDLENS_PFX_BASE64: ${{ secrets.WARDLENS_PFX_BASE64 }}
-          WARDLENS_PFX_PASSWORD: ${{ secrets.WARDLENS_PFX_PASSWORD }}
         run: .\scripts\build_windows.ps1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: WardLens-Windows
           path: dist/release/*
@@ -37,6 +34,10 @@ jobs:
         run: |
           $Assets = Get-ChildItem "dist\release" -File | ForEach-Object { $_.FullName }
           $Provenance = Get-Content "dist\release\BUILD_PROVENANCE.txt" -Raw
-          $ReleaseArgs = @("release", "create", "${{ github.ref_name }}") + $Assets + @("--verify-tag", "--generate-notes", "--title", "WardLens ${{ github.ref_name }}", "--notes", $Provenance)
-          if ($Provenance -match "UNSIGNED BUILD") { $ReleaseArgs += "--prerelease" }
+          $Notes = @"
+          $Provenance
+
+          Download WardLens-Portable.zip, extract the entire archive, then run Start-WardLens.bat. This is a clinical pilot build and is not validated for autonomous decisions or EMR write-back.
+          "@
+          $ReleaseArgs = @("release", "create", "${{ github.ref_name }}") + $Assets + @("--verify-tag", "--generate-notes", "--title", "WardLens ${{ github.ref_name }} portable pilot", "--notes", $Notes, "--prerelease")
           & gh @ReleaseArgs

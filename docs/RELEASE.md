@@ -1,34 +1,50 @@
-# Windows release process
+# Windows portable release process
+
+## Distribution design
+
+The supported artifact is `WardLens-Portable.zip`. After extraction it contains:
+
+```text
+WardLens/
+├── Start-WardLens.bat
+├── Diagnose-WardLens.bat
+├── runtime/       Python Software Foundation Windows distribution
+├── app/           WardLens Python source and resources
+├── packages/      hash-locked pure-Python dependencies
+└── THIRD-PARTY/   dependency lock, Python license, and official SPDX SBOM
+```
+
+The target computer does not run an installer, PowerShell, pip, a downloader, or an execution-policy bypass. The visible BAT launcher calls the bundled, Authenticode-signed PSF `python.exe` in isolated mode. Keep the complete extracted directory together.
+
+This design removes WardLens-generated PyInstaller binaries, but it cannot override AppLocker, WDAC, Defender, or hospital policy. If the package is denied, give hospital IT the release hashes and provenance; never instruct users to bypass endpoint protection.
 
 ## Build locally
 
-Run from a clean Windows checkout:
+Run from a clean Windows checkout with Python 3.14 and internet access:
 
 ```powershell
+py -3.14 -m pip install -e ".[dev]"
 .\scripts\build_windows.ps1
 ```
 
-The script runs lint/tests, constructs the complete Tk UI in a temporary state directory, builds one-file and onedir variants, runs resource/credential-backend and UI self-tests against both packages with a timeout, zips documentation, records installed dependency versions, and emits SHA-256 hashes under `dist\release`.
+The script:
 
-## Signing
-
-Unsigned PyInstaller binaries can be blocked by SmartScreen, Smart App Control, Defender, AppLocker or WDAC. Do not tell users to disable those controls. Obtain an RSA code-signing certificate from a trusted provider or use Microsoft Artifact Signing, then sign every EXE/DLL with the same publisher identity before hashing and publishing.
-
-The optional helper accepts a `SecureString` PFX password:
-
-```powershell
-$PfxPassword = Read-Host "PFX password" -AsSecureString
-.\scripts\sign_windows.ps1 -PfxPath C:\secure\wardlens.pfx -TargetPath .\dist\release\WardLens-OneFile.exe -PfxPassword $PfxPassword
-```
-
-For CI, prefer an identity-backed signing service over storing a reusable PFX. Ask hospital IT whether WDAC/AppLocker publisher rules or a file-hash allowlist is required.
+1. runs source validation, Ruff, and Pytest;
+2. downloads the exact PSF runtime pinned in `packaging/portable-runtime.json`;
+3. validates its SHA-256 against both the repository lock and python.org SPDX;
+4. installs only the exact pure-Python wheels and hashes in `packaging/portable-requirements.txt`;
+5. rejects native binaries outside the PSF runtime;
+6. verifies the PSF Authenticode publisher on the main runtime executables/DLL;
+7. starts core, visible Tk UI, WinCred, diagnostics, and the exact BAT launcher tests;
+8. extracts the finished ZIP to a fresh Windows path containing spaces and reruns the exact BAT/core/UI/diagnostic tests;
+9. emits `WardLens-Portable.zip`, `WardLens-Source.zip`, provenance, and SHA-256 sums under `dist\release`.
 
 ## GitHub release
 
-1. Update version in `pyproject.toml`, `src/wardlens/__init__.py` and `scripts/version_info.txt`.
-2. Run tests and inspect `git diff --check`.
-3. Tag `vX.Y.Z` and push the tag.
-4. GitHub Actions builds on a Windows runner and attaches both packages plus `SHA256SUMS.txt`.
-5. Download artifacts, verify hashes on a separate machine, scan, then copy the release ZIP to the approved Drive folder.
+1. Update the version in `pyproject.toml` and `src/wardlens/__init__.py`.
+2. Run tests, `python scripts/check_portable.py`, and `git diff --check`.
+3. Push the reviewed commit and tag `vX.Y.Z`.
+4. GitHub Actions rebuilds on a Windows runner and creates a prerelease pilot.
+5. Download the public asset without authentication, verify `SHA256SUMS.txt`, inspect the ZIP topology, and re-run the BAT on a separate Windows machine.
 
-Never publish `.env`, API keys, EMR credentials, raw HTML, responses, patient lists, screenshots or audit files. Built-in prompts are source-controlled; user-exported developer JSON may contain full custom prompts and must be reviewed for accidentally pasted clinical data before sharing.
+Never publish `.env`, API keys, EMR credentials, cookies, raw HTML, responses, patient lists, screenshots, diagnostics from a real workstation, or audit files. Built-in prompts are source controlled; exported developer JSON can include manually entered prompt content and must be reviewed before sharing.

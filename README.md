@@ -2,7 +2,7 @@
 
 WardLens 是給台灣 PGY／住院醫師使用的 Windows 查房輔助工具。它以唯讀方式整理 VGH EMR 病人清單與選取病人的 admission note、progress note、用藥、檢驗趨勢及報告索引，再由使用者決定是否把「先去識別、再人工預覽」的內容送往 OpenRouter。
 
-> 狀態：`v0.2.0` 是安全導向 MVP。Demo 與離線測試可用；真實 VGH adapter 仍須在院內網路以合成／授權測試病例完成 pilot。它不是已核准的醫療器材，也不應自動寫回 EMR。
+> 狀態：`v0.3.0` 是安全導向 portable pilot。Demo 與離線測試可用；真實 VGH adapter 仍須在院內網路以合成／授權測試病例完成 pilot。它不是已核准的醫療器材，也不應自動寫回 EMR。
 
 ## 目前功能
 
@@ -20,12 +20,15 @@ WardLens 是給台灣 PGY／住院醫師使用的 Windows 查房輔助工具。�
 
 ## 快速使用
 
-1. 從 GitHub Releases 下載 `WardLens-OneFile.exe`，或下載較容易讓院內 IT 檢查的 `WardLens-Onedir.zip`。
-2. 先勾選「合成資料 Demo」並登入，載入 18 人清單。
-3. 真實環境取消 Demo，輸入入口網帳密；帳密只留在本次記憶體，不會儲存。
-4. 輸入醫師燈號／病房後載入清單，選一名病人，再載入詳細資料。
-5. 若院方允許外部 AI，到「隱私與模型」啟用外部 AI、確認政策，再按「用瀏覽器登入 OpenRouter」；授權後 key 會自動存進 Windows Credential Manager。
-6. 每次先按「建立去識別預覽」，閱讀完整 payload，再送出或複製。
+1. 從 [GitHub Releases](https://github.com/YHHuan/wardlens/releases) 下載 `WardLens-Portable.zip`。
+2. 將 ZIP **完整解壓縮**到本機資料夾；不可在 ZIP 預覽內執行，也不可只複製單一 BAT。
+3. 雙擊 `Start-WardLens.bat`。啟動期間保留命令視窗；第一次先勾選「合成資料 Demo」並登入，確認能載入 18 人清單。
+4. 真實環境取消 Demo，輸入入口網帳密；帳密只留在本次記憶體，不會儲存。
+5. 輸入醫師燈號／病房後載入清單，選一名病人，再載入詳細資料。
+6. 若院方允許外部 AI，到「隱私與模型」啟用外部 AI、確認政策，再按「用瀏覽器登入 OpenRouter」；授權後 key 會自動存進 Windows Credential Manager。
+7. 每次先按「建立去識別預覽」，閱讀完整 payload，再送出或複製。
+
+目標電腦不需要安裝 Python、pip 或套件，也不需要系統管理員權限。若沒有出現視窗，雙擊 `Diagnose-WardLens.bat`；它會保留命令視窗並產生不含病歷、帳密、API key 與絕對使用者路徑的 `WardLens-Diagnostics.txt`。
 
 急症頁面的文字框可用 Windows `Win+H` 語音輸入。若病人有 peri-arrest、嚴重呼吸窘迫、休克、意識惡化或大出血，先叫 senior／RRT／Code／ICU，不要等待模型。
 
@@ -75,17 +78,13 @@ OpenAI 官方建議以較低 reasoning effort 壓低延遲，只有在評測顯�
 
 完整威脅模型見 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)。
 
-## 為什麼舊學長 EXE 可執行，新檔可能被擋
+## 為什麼改成 BAT portable package
 
-檢查三個舊 Release 後，它們都是未簽章的 x64 PyInstaller one-file EXE，沒有一個特殊「醫院允許格式」。因此較合理的解釋是既有檔案 hash／來源／端點政策或院內 allowlist 已有信任，而不是應模仿某種方式繞過防護。
+實際比對可運作的 `vgh-psy-extract` 後，關鍵不是 BAT 本身能繞過防護：BAT 最後仍啟動一份 Python。它使用 Python Software Foundation 官方發行的 runtime，而舊 WardLens one-file／onedir 則含每次 build 都會改變、且沒有可信 publisher 的 PyInstaller executable。院內端點政策很可能在 Python process 啟動前就封鎖後者，因此 WardLens 看起來「完全沒反應」，也來不及寫 Python 錯誤紀錄。
 
-Microsoft 說明 SmartScreen 會同時看 publisher reputation 與 file hash reputation；未簽章的新版本每次都要重新累積 reputation，而 enterprise policy 可以完全禁止使用者略過。正規路徑是：
+`v0.3.0` 改為同樣易稽核的分層方式：可閱讀的 BAT 只呼叫 ZIP 內的 PSF 官方 `python.exe`，完整 runtime ZIP 先以 python.org SPDX 所列 SHA-256 驗證，CI 再驗證 `python.exe`、`pythonw.exe`、`python314.dll` 的 Authenticode publisher。WardLens 與第三方套件只有 `.py`／resource 檔，且第三方 pure-Python wheels 全部鎖版本與 SHA-256；目標電腦不執行 PowerShell、安裝程式、pip、下載器或 execution-policy bypass。
 
-1. 同時提供 one-file 與 onedir ZIP、SHA-256、原始碼及 CI build 紀錄。
-2. 請院內 IT 以 hash／publisher allowlist 核准，而不是關閉 Defender 或繞過政策。
-3. 正式部署使用固定 publisher 的可信 RSA code-signing certificate，或採 Microsoft Store／Artifact Signing。
-
-[Microsoft SmartScreen reputation](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) · [Smart App Control signing](https://learn.microsoft.com/en-us/windows/apps/develop/smart-app-control/code-signing-for-smart-app-control)
+這會大幅減少未知 executable，但不能保證任何特定醫院政策一定放行。若仍被阻擋，應把 Release 的 `SHA256SUMS.txt`、`BUILD_PROVENANCE.txt` 與診斷結果交給院內 IT 做 publisher／hash allowlist；不要停用 Defender 或規避政策。
 
 ## VGH adapter 的防呆
 
@@ -103,16 +102,16 @@ Microsoft 說明 SmartScreen 會同時看 publisher reputation 與 file hash rep
 
 ## 開發
 
-需求：Python 3.11+；Windows 官方 Python 通常含 Tkinter。
+原始碼開發需求：Python 3.11+；Release 使用鎖定的官方 Windows Python 3.14.7 runtime。
 
 ```powershell
-py -3.12 -m venv .venv
+py -3.14 -m venv .venv
 .\.venv\Scripts\python -m pip install -e ".[dev]"
 .\.venv\Scripts\python -m pytest
 .\.venv\Scripts\python -m wardlens --demo
 ```
 
-建立免安裝版本：
+在 Windows 建立免安裝版本（build 電腦需可連 python.org／PyPI，目標電腦不需連線安裝）：
 
 ```powershell
 .\scripts\build_windows.ps1

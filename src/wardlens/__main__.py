@@ -5,8 +5,7 @@ import sys
 from wardlens import __version__
 
 
-def main(argv: list[str] | None = None) -> None:
-    arguments = list(sys.argv[1:] if argv is None else argv)
+def _dispatch(arguments: list[str]) -> None:
     if "--version" in arguments:
         print(f"WardLens {__version__}")
         return
@@ -22,6 +21,11 @@ def main(argv: list[str] | None = None) -> None:
         run_ui_self_test()
         print("WardLens packaged UI self-test passed.")
         return
+    if "--diagnose" in arguments:
+        from wardlens.selftest import run_diagnostics
+
+        run_diagnostics()
+        return
     try:
         from wardlens.app import main as app_main
     except ModuleNotFoundError as exc:
@@ -31,6 +35,26 @@ def main(argv: list[str] | None = None) -> None:
             ) from exc
         raise
     app_main(arguments)
+
+
+def main(argv: list[str] | None = None) -> None:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    try:
+        _dispatch(arguments)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as exc:
+        from wardlens.startup import report_unhandled_exception
+
+        noninteractive = {"--self-test", "--ui-self-test", "--diagnose", "--version"}
+        report_unhandled_exception(
+            type(exc),
+            exc,
+            exc.__traceback__,
+            phase="startup",
+            show_dialog=not noninteractive.intersection(arguments),
+        )
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

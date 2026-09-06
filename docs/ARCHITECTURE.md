@@ -22,6 +22,19 @@ No clinical record cache, raw prompt log, response log, EMR write endpoint, Sele
 
 The only local listener is an ephemeral `127.0.0.1` HTTP callback created during an explicit OpenRouter OAuth PKCE login. It receives a one-time authorization code, never clinical content, and closes immediately after success or timeout. No listener exists during normal EMR or LLM use.
 
+## Portable runtime boundary
+
+```text
+Start-WardLens.bat (readable launcher)
+        │ isolated mode; fixed relative paths
+        ▼
+PSF-signed python.exe + PSF release runtime
+        ├── app/       WardLens .py and resources
+        └── packages/  hash-locked pure-Python wheels only
+```
+
+The release does not contain a WardLens-built EXE. Runtime bytes are pinned to the SHA-256 published in python.org's SPDX document; CI verifies the main Authenticode publisher and rejects native files under `app/` or `packages/`. The target host performs no install or dependency download. Startup and Tk callback failures write only bounded, privacy-safe diagnostics outside clinical export locations.
+
 ## Developer configuration flow
 
 ```text

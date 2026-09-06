@@ -14,16 +14,9 @@ def main() -> None:
     )
     init_text = (ROOT / "src/wardlens/__init__.py").read_text(encoding="utf-8")
     init_match = re.search(r'^__version__\s*=\s*"([^"]+)"', init_text, re.MULTILINE)
-    version_info = (ROOT / "scripts/version_info.txt").read_text(encoding="utf-8")
-    file_match = re.search(r"StringStruct\('FileVersion', '([^']+)'\)", version_info)
-    product_match = re.search(r"StringStruct\('ProductVersion', '([^']+)'\)", version_info)
     versions = {
         "pyproject.toml": project_version,
         "src/wardlens/__init__.py": init_match.group(1) if init_match else "missing",
-        "scripts/version_info.txt FileVersion": file_match.group(1) if file_match else "missing",
-        "scripts/version_info.txt ProductVersion": product_match.group(1)
-        if product_match
-        else "missing",
     }
     mismatched = {name: value for name, value in versions.items() if value != project_version}
     if mismatched:

@@ -22,7 +22,7 @@
 | Stale/broken session causes mass false-empty | discard entire session after network/auth failure; explicit re-login | SSO behavior must be validated live |
 | Clipboard sync leaks data | only deidentified prompt; warning; conditional auto-clear | cloud clipboard may sync before clear |
 | AI draft copied as fact | source markers, visible warning, no automatic EMR write | clinician can still fail to review |
-| Supply-chain or binary reputation | source + CI tests + hashes + dual artifacts; optional trusted signing | unsigned first release may be blocked |
+| Supply-chain or binary reputation | readable BAT; pinned PSF runtime verified by official SPDX hash and Authenticode publisher; hash-locked pure-Python wheels; source + CI logs + release hashes | hospital policy can still deny BAT, Python, a new hash, or the download origin |
 | Unsafe developer configuration | explicit mode and warning; strict JSON schema; bounded prompts/tokens; fixed OpenRouter origin; preview invalidated after edits | a clinician can still author a clinically unsafe prompt or choose a weak model |
 
 ## Deliberate non-features
@@ -32,6 +32,7 @@
 - no API key in developer export/import files;
 - no arbitrary LLM host override through developer mode;
 - no Defender/SmartScreen bypass instructions;
+- no WardLens-generated PyInstaller executable or target-side PowerShell/pip/download step;
 - no automatic order placement or note submission;
 - no persistent clinical cache;
 - no background all-patient longitudinal crawl;

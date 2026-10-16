@@ -7,7 +7,8 @@ import requests
 
 from wardlens.config import AppSettings
 from wardlens.emr.base import LoginError
-from wardlens.emr.vgh import VGHReadOnlyAdapter
+from wardlens.emr.vgh import VGHReadOnlyAdapter, _RequestBudget
+from wardlens.models import PatientSummary
 
 
 @dataclass
@@ -153,3 +154,25 @@ def test_strong_block_marker_is_detected() -> None:
         "<html>系統偵測大量異常存取，請稍後再試</html>",
         "https://web9.vghtpe.gov.tw/emr/qemr/qemr.cfm",
     )
+
+
+def test_profile_birth_date_is_not_an_observation_timestamp() -> None:
+    url = "https://web9.vghtpe.gov.tw/emr/qemr/qemr.cfm?action=findPba&histno=90000001"
+    session = _Session(
+        pages={url: _Response("<table><tr><td>DOB</td><td>039/01/02</td></tr></table>", url)}
+    )
+    adapter = VGHReadOnlyAdapter(session=session)
+    adapter._logged_in = True
+    adapter._limiter.wait = lambda: None
+    record = adapter._fetch_record(
+        _RequestBudget(1),
+        source_type="profile",
+        title="Synthetic profile",
+        url=url,
+        preferred_link_title=None,
+        expected_id=None,
+        patient=PatientSummary(histno="90000001"),
+    )
+    assert record is not None
+    assert "039/01/02" in record.content
+    assert record.observed_at is None

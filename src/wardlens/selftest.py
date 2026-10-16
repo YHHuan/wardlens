@@ -10,12 +10,16 @@ import zipfile
 from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
 from xml.etree import ElementTree as ET
 
 from wardlens.emr.demo import DemoEMRAdapter
+from wardlens.emr.vgh import VGHReadOnlyAdapter, _FetchedPage
+from wardlens.models import PatientSummary
 from wardlens.security.secrets import WindowsCredentialBackend
 from wardlens.services.ai import AIWorkflowService
 from wardlens.services.export import export_patient_list_docx
+from wardlens.services.summary import render_bundle_overview
 
 
 def run_self_test() -> None:
@@ -44,6 +48,60 @@ def run_self_test() -> None:
             if not expected.issubset(document.namelist()):
                 raise RuntimeError("DOCX package smoke test failed.")
             ET.fromstring(document.read("word/document.xml"))
+
+    run_vgh_adapter_self_test()
+
+
+def run_vgh_adapter_self_test() -> None:
+    """Exercise the real parser with fabricated pages and no network requests."""
+
+    pages = {
+        "findPatient": "<table id='patlist'><tr><td>90000001</td></tr></table>",
+        "findEmr": "<div>Synthetic patient context</div>",
+        "findPba": "<table><tr><td>Birth date</td><td>039/01/02</td></tr></table>",
+        "findAdm": "<a title='admnote' href='?action=admissionDetail'>Note</a>",
+        "admissionDetail": "<pre>115/10/16 Synthetic admission note</pre>",
+        "findPrg": "<a href='?action=progressDetail&caseno=SYNTH001'>Progress</a>",
+        "progressDetail": "<table><tr><td>058/12/31 Synthetic old source</td></tr></table>",
+        "findUd": "<a href='?action=orderDetail&caseno=SYNTH001'>Orders</a>",
+        "orderDetail": "<table id='udorder'><tr><td>Synthetic order</td></tr></table>",
+        "findResd": "<table id='resdtable'><tr><td>115/10/16 Synthetic lab</td></tr></table>",
+        "findRes": "<table id='reslist'><tr><td>2026/10/16 Synthetic report</td></tr></table>",
+    }
+
+    def offline_page(url: str) -> _FetchedPage:
+        action = parse_qs(urlparse(url).query).get("action", [""])[0]
+        if action not in pages:
+            raise RuntimeError("The offline adapter self-test requested an unknown fixture.")
+        return _FetchedPage(pages[action], url)
+
+    adapter = VGHReadOnlyAdapter()
+    adapter._logged_in = True
+    try:
+        with (
+            patch.object(adapter, "_get", side_effect=offline_page),
+            patch.object(adapter.session, "request", side_effect=RuntimeError("Offline only")),
+        ):
+            bundle = adapter.fetch_patient_bundle(
+                PatientSummary(histno="90000001", case_no="SYNTH001")
+            )
+        expected = {
+            "profile",
+            "admission_note",
+            "progress_note",
+            "medication",
+            "lab_chemistry",
+            "lab_cbc",
+            "report_index",
+        }
+        if {record.source_type for record in bundle.records} != expected or bundle.warnings:
+            raise RuntimeError("Synthetic VGH bundle was not loaded completely.")
+        if bundle.records_of("profile")[0].observed_at is not None:
+            raise RuntimeError("A synthetic birth date was incorrectly used as source time.")
+        if "1969-12-31" not in render_bundle_overview(bundle):
+            raise RuntimeError("Synthetic historical source was not rendered correctly.")
+    finally:
+        adapter.logout()
 
 
 def run_windows_credential_self_test() -> None:

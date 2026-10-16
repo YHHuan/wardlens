@@ -22,7 +22,13 @@ from wardlens.emr.base import (
     RequestBudgetExceeded,
 )
 from wardlens.emr.parsers import PatientListParser, clean_text, same_origin_https, table_to_tsv
-from wardlens.models import PatientBundle, PatientListResult, PatientSummary, SourceRecord
+from wardlens.models import (
+    EMR_TIMEZONE,
+    PatientBundle,
+    PatientListResult,
+    PatientSummary,
+    SourceRecord,
+)
 
 
 @dataclass(slots=True)
@@ -430,7 +436,8 @@ class VGHReadOnlyAdapter:
                 status = "empty_unverified"
             else:
                 raise InterfaceChangedError("頁面存在但找不到可讀內容。")
-        observed_at = self._first_date(content)
+        # Profile dates commonly describe birth, not when this source was recorded.
+        observed_at = None if source_type == "profile" else self._first_date(content)
         record_id = sha256(final_page.url.encode("utf-8")).hexdigest()[:20]
         return SourceRecord(
             source_type=source_type,
@@ -655,19 +662,17 @@ class VGHReadOnlyAdapter:
 
     @staticmethod
     def _first_date(text: str) -> datetime | None:
-        patterns = (
-            (r"(?<!\d)(20\d{2})[-/](\d{1,2})[-/](\d{1,2})(?!\d)", False),
-            (r"(?<!\d)(\d{2,3})[-/](\d{1,2})[-/](\d{1,2})(?!\d)", True),
-        )
-        for pattern, roc in patterns:
-            match = re.search(pattern, text)
-            if not match:
-                continue
+        pattern = r"(?<!\d)(\d{2,4})[-/](\d{1,2})[-/](\d{1,2})(?!\d)"
+        for match in re.finditer(pattern, text):
             year, month, day = (int(part) for part in match.groups())
-            if roc:
+            if year == 0:
+                continue
+            if len(match.group(1)) < 4:
                 year += 1911
             try:
-                return datetime(year, month, day).astimezone()
+                # Never send a naive historical date through OS localtime/mktime:
+                # Windows raises OSError(22) for negative Unix timestamps.
+                return datetime(year, month, day, tzinfo=EMR_TIMEZONE)
             except ValueError:
                 continue
         return None

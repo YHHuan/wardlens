@@ -35,7 +35,7 @@ The script:
 4. installs only the exact pure-Python wheels and hashes in `packaging/portable-requirements.txt`;
 5. rejects native binaries outside the PSF runtime;
 6. verifies the PSF Authenticode publisher on the main runtime executables/DLL;
-7. starts core, visible Tk UI, WinCred, diagnostics, and the exact BAT launcher tests;
+7. starts core (including the real VGH parser on fabricated historical-date HTML, with all network requests disabled), visible Tk UI, WinCred, diagnostics, and the exact BAT launcher tests;
 8. extracts the finished ZIP to a fresh Windows path containing spaces and reruns the exact BAT/core/UI/diagnostic tests;
 9. emits `WardLens-Portable.zip`, `WardLens-Source.zip`, provenance, and SHA-256 sums under `dist\release`.
 

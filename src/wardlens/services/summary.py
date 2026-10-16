@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from wardlens.models import PatientBundle, SourceRecord
+from wardlens.models import EMR_TIMEZONE, PatientBundle, SourceRecord
 
 _todo_pattern = re.compile(
     r"(?i)(?:^|\b)(?:todo|to[- ]?do|pending|follow(?:\s|-)?up|recheck|待辦|追蹤|確認|補|安排)\b"
@@ -52,7 +52,7 @@ def render_bundle_overview(bundle: PatientBundle) -> str:
     lines.extend(["", "來源稽核："])
     for source_id, record in bundle.source_map():
         observed = (
-            record.observed_at.astimezone().strftime("%Y-%m-%d %H:%M")
+            record.observed_at.astimezone(EMR_TIMEZONE).strftime("%Y-%m-%d %H:%M")
             if record.observed_at
             else "時間未建立"
         )

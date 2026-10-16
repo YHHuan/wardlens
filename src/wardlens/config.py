@@ -13,44 +13,63 @@ DEFAULT_PROFILES = {
     "fast": ModelProfile(
         key="fast",
         label="Fast｜日常整理",
-        model="openai/gpt-5.6-terra",
+        model="openai/gpt-6.1-sol",
         reasoning_effort="low",
-        max_tokens=1400,
+        max_tokens=4000,
         intended_use="病人清單整理、待辦與報告摘要",
     ),
     "deep": ModelProfile(
         key="deep",
         label="Slow｜複雜推理",
-        model="openai/gpt-5.6-sol",
+        model="openai/gpt-6-astra",
         reasoning_effort="high",
-        max_tokens=6000,
+        max_tokens=12000,
         intended_use="複雜臨床問題與第二次複核",
     ),
     "emergency_fast": ModelProfile(
         key="emergency_fast",
         label="急症立即版",
-        model="openai/gpt-5.6-sol",
+        model="openai/gpt-6.1-sol",
         reasoning_effort="low",
-        max_tokens=1800,
+        max_tokens=4000,
         intended_use="先產生短版床邊 cognitive aid",
     ),
     "claude_second": ModelProfile(
         key="claude_second",
         label="Claude 第二意見",
-        model="anthropic/claude-sonnet-5",
+        model="anthropic/claude-sonnet-5.5",
         reasoning_effort="high",
-        max_tokens=6000,
+        max_tokens=8000,
         intended_use="選擇性跨模型複核",
     ),
     "gemini_fast": ModelProfile(
         key="gemini_fast",
         label="Gemini Flash",
-        model="google/gemini-3.7-flash",
+        model="google/gemini-3.8-flash",
         reasoning_effort="low",
-        max_tokens=1800,
+        max_tokens=4000,
         intended_use="低延遲替代模型",
     ),
+    "claude_deep": ModelProfile(
+        key="claude_deep",
+        label="Claude Opus 深入複核",
+        model="anthropic/claude-opus-5.5",
+        reasoning_effort="high",
+        max_tokens=12000,
+        intended_use="較慢且較高成本的第二輪複核",
+    ),
+    "gemini_deep": ModelProfile(
+        key="gemini_deep",
+        label="Gemini Argon 深入複核",
+        model="google/gemini-4-argon",
+        reasoning_effort="high",
+        max_tokens=12000,
+        intended_use="Gemini 高推理第二輪複核",
+    ),
 }
+
+DEEP_PROFILES = {"deep", "claude_second", "claude_deep", "gemini_deep"}
+MODEL_CATALOG_CHECKED = "2026-10-16"
 
 DEVELOPER_CONFIG_SCHEMA = 1
 ALLOWED_REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
@@ -73,7 +92,7 @@ def validate_model_id(value: str) -> str:
     model = value.strip()
     if len(model) > 180 or not MODEL_ID_PATTERN.fullmatch(model):
         raise DeveloperConfigError(
-            "模型 ID 格式不正確；請使用 provider/model（例如 openai/gpt-5.6-terra）。"
+            "模型 ID 格式不正確；請使用 provider/model（例如 openai/gpt-6.1-sol）。"
         )
     return model
 
@@ -171,7 +190,8 @@ class AppSettings:
     max_requests_per_minute: int = 60
     max_patient_pages: int = 20
     max_patients: int = 200
-    lab_lookback_months: int = 60
+    lab_lookback_months: int = 3
+    history_window_version: int = 1
 
     @classmethod
     def load(cls, path: Path | None = None) -> AppSettings:
@@ -186,6 +206,16 @@ class AppSettings:
             return cls()
         allowed = {field_name for field_name in cls.__dataclass_fields__}
         values = {key: value for key, value in payload.items() if key in allowed}
+        # v0.3 saved the invisible 60-month default on every launch. Upgrade that
+        # shipped value to the requested 3 months; keep supported custom windows.
+        months = values.get("lab_lookback_months", 3)
+        if not payload.get("history_window_version") and months == 60:
+            months = 3
+        try:
+            values["lab_lookback_months"] = max(1, min(int(months), 12))
+        except (ValueError, TypeError):
+            values["lab_lookback_months"] = 3
+        values["history_window_version"] = 1
         values["custom_profiles"] = _clean_profile_overrides(values.get("custom_profiles"))
         values["custom_prompts"] = _clean_prompt_overrides(values.get("custom_prompts"))
         if not isinstance(values.get("custom_models", {}), dict):

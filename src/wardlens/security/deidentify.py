@@ -16,6 +16,8 @@ class DataLeakRisk(ValueError):
 class Finding:
     kind: str
     redacted_preview: str
+    start: int | None = None
+    end: int | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -86,7 +88,10 @@ class Deidentifier:
         r"(?<![A-Za-z0-9])(?=[A-Z0-9]{9,13}(?![A-Za-z0-9]))(?=[A-Z0-9]*\d)[A-Z]{1,2}[A-Z0-9]{8,11}(?![A-Za-z0-9])",
         re.IGNORECASE,
     )
-    _redaction_marker = re.compile(r"\[[A-Z0-9_]+_REMOVED\]")
+    _redaction_marker = re.compile(
+        r"\[(?:KNOWN_HISTNO|KNOWN_CASE_NO|KNOWN_NAME|KNOWN_LOCATION|ID|EMAIL|PHONE|"
+        r"IDENTIFIER|EXACT_DATE|MANUAL_IDENTIFIER)_REMOVED\]"
+    )
 
     def deidentify(
         self,
@@ -169,7 +174,8 @@ class Deidentifier:
         # Redaction labels intentionally retain field names such as ``histno=`` so
         # clinicians can understand the preview. Remove only our bounded marker
         # tokens before scanning, otherwise the scanner flags its own output.
-        scannable = self._redaction_marker.sub("", text)
+        # Preserve offsets for the local review UI; never join digits across a marker.
+        scannable = self._redaction_marker.sub(lambda m: " " * len(m.group()), text)
         patterns = (
             (self._taiwan_id, "taiwan_id"),
             (self._legacy_arc, "legacy_arc"),
@@ -183,13 +189,34 @@ class Deidentifier:
         )
         for pattern, kind in patterns:
             for match in pattern.finditer(scannable):
-                findings.append(Finding(kind, _masked(match.group(0))))
+                findings.append(Finding(kind, _masked(match.group(0)), *match.span()))
 
         if patient is not None:
             for value in patient.redaction_terms():
-                if value in scannable:
-                    findings.append(Finding("known_patient_identifier", _masked(value)))
+                for match in re.finditer(re.escape(value), scannable):
+                    findings.append(
+                        Finding("known_patient_identifier", _masked(value), *match.span())
+                    )
         return findings
+
+    @staticmethod
+    def mask_findings(text: str, findings: list[Finding] | tuple[Finding, ...]) -> str:
+        """Apply only user-selected current findings, merging overlapping spans."""
+        spans: list[tuple[int, int]] = []
+        for finding in findings:
+            start, end = finding.start, finding.end
+            if start is None or end is None or not 0 <= start < end <= len(text):
+                raise ValueError("疑似識別碼的位置已變更，請重新檢查。")
+            spans.append((start, end))
+        merged: list[tuple[int, int]] = []
+        for start, end in sorted(spans):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+            else:
+                merged.append((start, end))
+        for start, end in reversed(merged):
+            text = text[:start] + "[MANUAL_IDENTIFIER_REMOVED]" + text[end:]
+        return text
 
     def assert_safe(self, text: str, patient: PatientSummary | None = None) -> None:
         risks = self.scan(text, patient=patient)

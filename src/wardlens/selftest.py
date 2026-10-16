@@ -66,7 +66,7 @@ def run_vgh_adapter_self_test() -> None:
         "findUd": "<a href='?action=orderDetail&caseno=SYNTH001'>Orders</a>",
         "orderDetail": "<table id='udorder'><tr><td>Synthetic order</td></tr></table>",
         "findResd": "<table id='resdtable'><tr><td>115/10/16 Synthetic lab</td></tr></table>",
-        "findRes": "<table id='reslist'><tr><td>2026/10/16 Synthetic report</td></tr></table>",
+        "findRes": "<table id='reslist'><tr><td>Synthetic report</td><td>blood</td><td></td><td></td><td>2026/10/16</td></tr></table>",
     }
 
     def offline_page(url: str) -> _FetchedPage:
@@ -94,7 +94,7 @@ def run_vgh_adapter_self_test() -> None:
             "lab_cbc",
             "report_index",
         }
-        if {record.source_type for record in bundle.records} != expected or bundle.warnings:
+        if {record.source_type for record in bundle.records} != expected:
             raise RuntimeError("Synthetic VGH bundle was not loaded completely.")
         if bundle.records_of("profile")[0].observed_at is not None:
             raise RuntimeError("A synthetic birth date was incorrectly used as source time.")
@@ -140,7 +140,59 @@ def run_ui_self_test() -> None:
             if not root.winfo_viewable():
                 app._on_close()
                 raise RuntimeError("The WardLens window was constructed but was not visible.")
-            app._on_close()
+            try:
+                _exercise_preview_review(app, root)
+            finally:
+                app._on_close()
+
+
+def _exercise_preview_review(app, root) -> None:
+    """Exercise actual modal widgets for both workflows, using fabricated codes."""
+    from wardlens.preview import PreviewReviewDialog
+
+    def auto_review(*args, **kwargs):
+        dialog = PreviewReviewDialog(*args, **kwargs)
+
+        def repair() -> None:
+            try:
+                dialog._mask_all()
+                dialog._apply()
+            finally:
+                if dialog.window.winfo_exists():
+                    dialog.window.destroy()
+
+        root.after(1, repair)
+        return dialog
+
+    adapter = DemoEMRAdapter()
+    adapter.login()
+    app.current_patient = adapter.search_patients().patients[0]
+    app.current_bundle = adapter.fetch_patient_bundle(app.current_patient)
+    with (
+        patch("requests.sessions.Session.request", side_effect=RuntimeError("Offline only")),
+        patch("wardlens.app.PreviewReviewDialog", side_effect=auto_review),
+        patch("tkinter.messagebox.askyesno", return_value=True),
+    ):
+        app.question_text.insert("1.0", "Synthetic accession 87654321; creatinine 1.8 mg/dL")
+        app.emergency_text.insert("1.0", "Synthetic event; accession 87654321; BP unavailable")
+        root.update()
+        app._prepare_ai()
+        app._prepare_emergency()
+        root.update()
+        for prepared in (app.ai_prepared, app.emergency_prepared):
+            if prepared is None or "87654321" in prepared.preview.text:
+                raise RuntimeError("Local preview recovery failed.")
+            app.ai.record_copy(prepared)
+        # Merely moving the caret must not invalidate, but paste/edit must.
+        app.question_text.event_generate("<KeyRelease-Left>")
+        root.update()
+        if app.ai_prepared is None:
+            raise RuntimeError("Non-edit key invalidated preview.")
+        app.question_text.insert("end", " changed")
+        app.emergency_text.insert("end", " changed")
+        root.update()
+        if app.ai_prepared is not None or app.emergency_prepared is not None:
+            raise RuntimeError("Edited input retained a stale preview.")
 
 
 def _import_dependencies() -> None:

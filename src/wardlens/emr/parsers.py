@@ -15,12 +15,44 @@ def clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", value.replace("\xa0", " ")).strip()
 
 
-def table_to_tsv(table: Tag, max_rows: int = 500) -> str:
+def table_to_tsv(table: Tag, max_rows: int = 10000) -> str:
+    """Preserve merged date/unit headers so values remain aligned across dates."""
     lines: list[str] = []
-    for row in table.find_all("tr")[:max_rows]:
-        cells = [clean_text(cell.get_text(" ", strip=True)) for cell in row.find_all(["th", "td"])]
+    rows = [row for row in table.find_all("tr") if row.find_parent("table") is table]
+    pending: dict[int, tuple[str, int]] = {}
+    for row in rows[:max_rows]:
+        cells: list[str] = []
+        col = 0
+
+        def fill_pending(cells: list[str] = cells) -> None:
+            nonlocal col
+            while col in pending:
+                value, remaining = pending.pop(col)
+                cells.append(value)
+                if remaining > 1:
+                    pending[col] = (value, remaining - 1)
+                col += 1
+
+        for cell in row.find_all(["th", "td"], recursive=False):
+            fill_pending()
+            value = clean_text(cell.get_text(" ", strip=True))
+            try:
+                rowspan = max(1, min(int(str(cell.get("rowspan", 1))), max_rows))
+                colspan = max(1, min(int(str(cell.get("colspan", 1))), 1000))
+            except ValueError:
+                rowspan = colspan = 1
+            for _ in range(colspan):
+                cells.append(value)
+                if rowspan > 1:
+                    pending[col] = (value, rowspan - 1)
+                col += 1
+        fill_pending()
         if any(cells):
             lines.append("\t".join(cells))
+    if len(rows) > max_rows:
+        from wardlens.services.history import TRUNCATION_MARKER
+
+        lines.append(TRUNCATION_MARKER)
     return "\n".join(lines)
 
 

@@ -25,6 +25,10 @@ Stop immediately if any of the following occurs:
 8. Verify a report containing ordinary text `GAS BLOCKED` is not considered a block page.
 9. Inspect deidentified preview using synthetic names, IDs, phone, email, exact dates, copied headers and third-party names.
 10. Do not enable cloud AI until hospital privacy/security approval is documented.
+11. Select a three-month window; compare at least two dates, units and values in DCHEM/DCBC against QEMR. Confirm headers remain aligned for merged rows/columns.
+12. Test a window spanning New Year. Check both annual report indices, report-date filtering, unknown-date warnings and the latest-12-detail cap. Report time must not be mistaken for specimen time. Confirm actual hospital detail DOM; unrecognized pages must remain explicitly missing, not "normal".
+13. Insert a fabricated unlabeled long identifier into both AI workflows. Confirm the local review dialog, mask/recheck, exact approved preview, cancel, and invalidation after input changes. No actual record is needed for this test.
+14. Use the GET-only connection check first, then a synthetic Demo request on the authorized account. Catalog/ZDR validation does not certify paid generation or clinical quality.
 
 ## Fixture capture
 

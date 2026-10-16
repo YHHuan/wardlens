@@ -52,14 +52,31 @@ class AIWorkflowService:
             emergency_text=emergency_text,
         ).canonical()
         patient: PatientSummary | None = bundle.patient if bundle is not None else None
+        return self.prepare_reviewed(
+            raw,
+            workflow=workflow,
+            patient=patient,
+            source_fetched_at=bundle.fetched_at if bundle is not None else None,
+        )
+
+    def prepare_reviewed(
+        self,
+        text: str,
+        *,
+        workflow: str,
+        patient: PatientSummary | None = None,
+        source_fetched_at: datetime | None = None,
+    ) -> PreparedRequest:
+        """Recheck a locally edited draft; this cannot send or bypass the guard."""
+        raw = PromptEnvelope.parse(text).canonical()
         preview = self.guard.prepare(raw, patient=patient)
         # Parse now as a structural integrity check, before the preview reaches UI.
-        PromptEnvelope.parse(preview.text)
+        self.guard.verify(preview, PromptEnvelope.parse(preview.text).canonical(), patient)
         self._audit("preview_created", preview.sha256, outcome="success")
         return PreparedRequest(
             preview=preview,
             workflow=workflow,
-            source_fetched_at=bundle.fetched_at if bundle is not None else None,
+            source_fetched_at=source_fetched_at,
         )
 
     def complete(

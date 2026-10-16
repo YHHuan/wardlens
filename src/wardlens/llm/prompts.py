@@ -4,7 +4,8 @@ import html
 from dataclasses import dataclass
 from importlib.resources import files
 
-from wardlens.models import PatientBundle
+from wardlens.models import EMR_TIMEZONE, PatientBundle
+from wardlens.services.history import bounded_source, coverage_summary, window_description
 
 
 class PromptFormatError(ValueError):
@@ -117,20 +118,41 @@ class PromptBuilder:
             f"Age: {patient.age or 'not provided'}",
             f"Sex: {patient.sex or 'not provided'}",
             f"Source count: {len(bundle.records)}",
+            window_description(bundle, relative=True),
             "</patient_context>",
         ]
+        if bundle.warnings:
+            header.append(
+                "<source_warnings>\n"
+                + self._escape_source("\n".join(bundle.warnings))
+                + "\n</source_warnings>"
+            )
         source_blocks: list[str] = []
-        total_chars = 0
-        for source_id, record in bundle.source_map():
-            content = record.content[:24000]
-            if total_chars + len(content) > 140000:
-                content = content[: max(0, 140000 - total_chars)]
-            if not content:
-                break
-            total_chars += len(content)
+        # Fair-share allocation prevents early notes from crowding out all labs
+        # and later reports. Short sources donate their unused share.
+        allocations = [0] * len(bundle.records)
+        remaining = 240000
+        pending = set(range(len(bundle.records)))
+        while pending and remaining:
+            share = max(1, remaining // len(pending))
+            for i in sorted(pending):
+                need = min(len(bundle.records[i].content), 120000) - allocations[i]
+                take = min(need, share, remaining)
+                allocations[i] += take
+                remaining -= take
+                if take == need:
+                    pending.remove(i)
+        anchor = bundle.fetched_at.astimezone(EMR_TIMEZONE).date()
+        for index, (source_id, record) in enumerate(bundle.source_map()):
+            content = bounded_source(record.content, allocations[index])
+            if record.source_type.startswith("lab_") or record.source_type in {
+                "report",
+                "report_index",
+            }:
+                content = coverage_summary(record, relative_to=anchor) + "\n" + content
             when = "time not established"
             if record.observed_at is not None:
-                day_delta = (record.observed_at.date() - bundle.fetched_at.date()).days
+                day_delta = (record.observed_at.astimezone(EMR_TIMEZONE).date() - anchor).days
                 when = "D0" if day_delta == 0 else f"D{day_delta:+d}"
             metadata = (
                 f"id={source_id}; type={record.source_type}; title={record.title}; "

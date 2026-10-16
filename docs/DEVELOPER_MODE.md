@@ -19,6 +19,12 @@ Each fixed workflow slot accepts:
 
 Use **刷新目前 ZDR 模型目錄** to populate the pickers with live models that currently advertise a ZDR endpoint. **刷新全部模型目錄** is useful for discovery, but selecting one does not bypass the send-time ZDR check: if ZDR is enabled and the chosen model lacks a qualifying endpoint, WardLens fails closed.
 
+The seven current defaults are listed in the README (catalog verified 2026-10-16). Upgrades preserve existing overrides. **模型改用新版內建值（保留 prompt）** replaces only the editor's model/effort/token rows; save to apply. The general “restore all” button also replaces prompts, so do not use it merely to migrate models.
+
+Saving checks syntax; send-time public metadata checks validate existence, declared reasoning support and effort compatibility, then ZDR availability. Mandatory-reasoning models cannot use `none`. Refreshing the catalog does not silently change the selected model. The request uses `data_collection=deny`, `require_parameters=true`, and no provider fallbacks. Model weights, latency and clinical quality are not validated by the catalog check.
+
+The token limit includes reasoning on many providers, not just visible output. A `length` finish or missing normal completion is reported as incomplete, not success. See [AI and trends](AI_AND_TRENDS.md).
+
 ## Prompts
 
 Prompts can be edited separately for:

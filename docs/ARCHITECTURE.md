@@ -11,7 +11,7 @@ in-memory PatientBundle ──► local overview / local DOCX or CSV
         ▼
 PromptBuilder ─► deterministic de-identification ─► residual-risk scan
         │                                                  │ block
-        ▼                                                  └─────► stop
+        ▼                                                  └─────► local repair → recheck
 exact outbound preview + SHA-256
         │ clinician approval
         ├────────► clipboard (auto-clear attempt)
@@ -19,6 +19,8 @@ exact outbound preview + SHA-256
 ```
 
 No clinical record cache, raw prompt log, response log, EMR write endpoint, Selenium driver, browser extension, or long-lived local web server exists in the MVP.
+
+Blocked drafts are held in memory in a separate editable local dialog; they are never an approved request. Every repaired draft is canonicalized, rescanned and hashed before becoming the exact read-only preview. Both workflows still require an explicit send confirmation. See [AI and trends](AI_AND_TRENDS.md) for history bounds and coverage semantics.
 
 The only local listener is an ephemeral `127.0.0.1` HTTP callback created during an explicit OpenRouter OAuth PKCE login. It receives a one-time authorization code, never clinical content, and closes immediately after success or timeout. No listener exists during normal EMR or LLM use.
 

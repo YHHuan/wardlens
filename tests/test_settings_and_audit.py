@@ -92,7 +92,29 @@ def test_invalid_saved_developer_overrides_fail_back_to_defaults(tmp_path) -> No
     )
     loaded = AppSettings.load(path)
     assert loaded.custom_profiles == {}
-    assert loaded.profile("fast").model == "openai/gpt-5.6-terra"
+    assert loaded.profile("fast").model == "openai/gpt-6.1-sol"
+
+
+def test_history_default_upgrade_preserves_custom_models_and_prompts(tmp_path) -> None:
+    path = tmp_path / "settings.json"
+    prompt = "Custom prompt " * 10
+    path.write_text(
+        json.dumps(
+            {
+                "lab_lookback_months": 60,
+                "custom_models": {"fast": "openai/intentional-pin"},
+                "custom_prompts": {"rounding": prompt},
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = AppSettings.load(path)
+    assert settings.lab_lookback_months == 3
+    assert settings.profile("fast").model == "openai/intentional-pin"
+    assert settings.custom_prompts["rounding"] == prompt.strip()
+    settings.lab_lookback_months = 6
+    settings.save(path)
+    assert AppSettings.load(path).lab_lookback_months == 6
 
 
 def test_audit_contains_only_bounded_metadata(tmp_path) -> None:

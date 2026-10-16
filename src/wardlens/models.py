@@ -79,6 +79,7 @@ class PatientBundle:
     records: list[SourceRecord] = field(default_factory=list)
     fetched_at: datetime = field(default_factory=utc_now)
     warnings: list[str] = field(default_factory=list)
+    lookback_months: int | None = None
 
     def records_of(self, *source_types: str) -> list[SourceRecord]:
         wanted = set(source_types)

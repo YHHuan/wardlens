@@ -32,26 +32,6 @@ def _safe_exception_summary(exc: BaseException) -> str:
     return "message omitted to prevent clinical or credential data from entering diagnostics"
 
 
-def _redact_path(value: str) -> str:
-    replacements: list[tuple[str, str]] = []
-    runtime_dir = Path(sys.executable).resolve().parent
-    package_dir = runtime_dir.parent if runtime_dir.name.lower() == "runtime" else None
-    for raw, label in (
-        (os.getenv("LOCALAPPDATA", ""), "[LOCALAPPDATA]"),
-        (str(Path.home()), "[USER_HOME]"),
-        (str(Path.cwd()), "[WORKDIR]"),
-        (str(package_dir) if package_dir else "", "[PACKAGE]"),
-        (str(runtime_dir), "[RUNTIME]"),
-    ):
-        if raw:
-            replacements.append((raw, label))
-    redacted = value
-    for raw, label in sorted(replacements, key=lambda pair: len(pair[0]), reverse=True):
-        redacted = redacted.replace(raw, label)
-        redacted = redacted.replace(raw.replace("\\", "/"), label)
-    return redacted
-
-
 def _render_diagnostic(
     exc_type: type[BaseException],
     exc: BaseException,
@@ -66,9 +46,10 @@ def _render_diagnostic(
     frames = traceback.extract_tb(tb) if tb is not None else []
     stack = []
     for frame in frames[-30:]:
-        location = _redact_path(frame.filename)
-        source = (frame.line or "").strip()
-        stack.append(f"  {location}:{frame.lineno} in {frame.name}: {source}")
+        # Only code filenames/functions/line numbers: no source line, locals,
+        # exception text, response URLs, or user-specific directory names.
+        location = frame.filename.replace("\\", "/").rsplit("/", 1)[-1]
+        stack.append(f"  {location}:{frame.lineno} in {frame.name}")
     if not stack:
         stack.append("  no Python traceback was available")
     return "\n".join(
@@ -91,7 +72,7 @@ def _render_diagnostic(
 
 def _write_diagnostic(content: str, target: Path | None = None) -> Path | None:
     destinations = [target or diagnostic_path()]
-    fallback = Path(tempfile.gettempdir()) / "WardLens-startup-error.log"
+    fallback = Path(tempfile.gettempdir()) / f"WardLens-{destinations[0].name}"
     if fallback not in destinations:
         destinations.append(fallback)
     for destination in destinations:
@@ -144,3 +125,23 @@ def install_tk_exception_handler(root: Any) -> None:
         report_unhandled_exception(exc_type, exc, tb, phase="tk-callback")
 
     root.report_callback_exception = callback
+
+
+def operation_error_detail(exc: Exception, *, phase: str = "operation") -> str:
+    """Record bounded technical context for errors caught by the UI worker."""
+
+    phase = phase if phase in {"operation", "load-patient"} else "operation"
+    path = report_unhandled_exception(
+        type(exc),
+        exc,
+        exc.__traceback__,
+        phase=phase,
+        target=diagnostic_path().with_name("operation-error.log"),
+        show_dialog=False,
+    )
+    location = f"\n診斷檔：{path}" if path is not None else "\n診斷檔無法寫入；請回報錯誤碼。"
+    return (
+        f"發生未預期錯誤（{phase}／{type(exc).__name__}）。"
+        "\n診斷只記錄程式版本與錯誤位置，不記錄病歷、帳密或 API key。"
+        f"{location}"
+    )

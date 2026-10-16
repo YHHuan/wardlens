@@ -11,7 +11,7 @@ import pytest
 from wardlens.models import PatientSummary
 from wardlens.security.secrets import CredentialSecretStore, SecretStoreError
 from wardlens.services.export import export_patient_list_docx
-from wardlens.startup import report_unhandled_exception
+from wardlens.startup import operation_error_detail, report_unhandled_exception
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -124,3 +124,40 @@ def test_portable_zip_uses_standard_forward_slash_members(tmp_path) -> None:
     )
     with zipfile.ZipFile(output) as archive:
         assert archive.namelist() == ["WardLens/app/main.py"]
+
+
+def test_caught_operation_error_creates_private_technical_diagnostic(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("wardlens.startup.diagnostic_path", lambda: tmp_path / "startup-error.log")
+    secret = "SYNTHETIC-PHI-and-key-998877"
+    try:
+        raise OSError(22, secret)
+    except OSError as exc:
+        detail = operation_error_detail(exc, phase="load-patient")
+    content = (tmp_path / "operation-error.log").read_text(encoding="utf-8")
+    assert "load-patient" in detail
+    assert "OSError" in detail
+    assert "operation-error.log" in detail
+    assert "phase: load-patient" in content
+    assert "errno=22" in content
+    assert "wardlens_version:" in content
+    assert "test_caught_operation_error" in content
+    assert secret not in content + detail
+    assert str(tmp_path) not in content
+    assert str(ROOT) not in content
+    assert "raise OSError" not in content
+
+
+def test_operation_error_phase_cannot_log_arbitrary_content(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("wardlens.startup.diagnostic_path", lambda: tmp_path / "startup-error.log")
+    detail = operation_error_detail(RuntimeError("secret-value"), phase="secret-phase")
+    content = (tmp_path / "operation-error.log").read_text(encoding="utf-8")
+    assert "phase: operation" in content
+    assert "secret" not in content + detail
+
+
+def test_operation_error_still_shows_code_when_log_cannot_be_written(monkeypatch) -> None:
+    monkeypatch.setattr("wardlens.startup._write_diagnostic", lambda *args, **kwargs: None)
+    detail = operation_error_detail(RuntimeError("hidden-value"), phase="load-patient")
+    assert "load-patient／RuntimeError" in detail
+    assert "無法寫入" in detail
+    assert "hidden-value" not in detail

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from hashlib import sha256
 from typing import Any
+
+# EMR date-only values use the hospital's civil UTC+08:00 time, not the
+# workstation timezone. An explicit offset avoids Windows pre-1970 localtime.
+EMR_TIMEZONE = timezone(timedelta(hours=8))
 
 
 def utc_now() -> datetime:

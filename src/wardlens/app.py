@@ -27,7 +27,7 @@ from wardlens.security.secrets import CredentialSecretStore, SecretStoreError
 from wardlens.services.ai import AIWorkflowService, PreparedRequest
 from wardlens.services.export import export_patient_list_csv, export_patient_list_docx
 from wardlens.services.summary import render_bundle_overview
-from wardlens.startup import install_tk_exception_handler
+from wardlens.startup import install_tk_exception_handler, operation_error_detail
 
 WORKFLOW_LABELS = {
     "查房重點": "rounding",
@@ -612,7 +612,7 @@ class WardLensApp:
             self._invalidate_ai_preview()
             self._invalidate_emergency_preview()
 
-        self._run_async("正在以唯讀方式載入選取病人…", task, success)
+        self._run_async("正在以唯讀方式載入選取病人…", task, success, phase="load-patient")
 
     def _export(self, kind: str) -> None:
         if not self.patients:
@@ -1045,6 +1045,8 @@ class WardLensApp:
         label: str,
         task: Callable[[], Any],
         success: Callable[[Any], None],
+        *,
+        phase: str = "operation",
     ) -> None:
         if self._busy:
             messagebox.showwarning("工作進行中", "請等待目前工作完成或先停止生成。")
@@ -1056,24 +1058,28 @@ class WardLensApp:
             try:
                 result = task()
             except Exception as exc:
-                self.root.after(0, lambda error=exc: self._show_error(error))
+                self.root.after(0, lambda error=exc: self._show_error(error, phase=phase))
             else:
-                self.root.after(0, lambda value=result: self._finish_success(success, value))
+                self.root.after(
+                    0, lambda value=result: self._finish_success(success, value, phase=phase)
+                )
             finally:
                 self.root.after(0, self._mark_idle)
 
         threading.Thread(target=worker, daemon=True, name="wardlens-task").start()
 
-    def _finish_success(self, callback: Callable[[Any], None], value: Any) -> None:
+    def _finish_success(
+        self, callback: Callable[[Any], None], value: Any, *, phase: str = "operation"
+    ) -> None:
         try:
             callback(value)
         except Exception as exc:
-            self._show_error(exc)
+            self._show_error(exc, phase=phase)
 
     def _mark_idle(self) -> None:
         self._busy = False
 
-    def _show_error(self, exc: Exception) -> None:
+    def _show_error(self, exc: Exception, *, phase: str = "operation") -> None:
         if isinstance(exc, DataLeakRisk):
             title = "去識別檢查未通過"
             detail = str(exc)
@@ -1082,7 +1088,7 @@ class WardLensApp:
             detail = str(exc)
         else:
             title = "未預期錯誤"
-            detail = "發生未預期錯誤；請保留程式版本與操作步驟回報。病人內容不會寫入 log。"
+            detail = operation_error_detail(exc, phase=phase)
         self.status_var.set(detail)
         messagebox.showerror(title, detail)
 

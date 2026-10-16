@@ -2,7 +2,7 @@
 
 WardLens 是給台灣 PGY／住院醫師使用的 Windows 查房輔助工具。它以唯讀方式整理 VGH EMR 病人清單與選取病人的 admission note、progress note、用藥、檢驗趨勢及報告索引，再由使用者決定是否把「先去識別、再人工預覽」的內容送往 OpenRouter。
 
-> 狀態：`v0.3.0` 是安全導向 portable pilot。Demo 與離線測試可用；真實 VGH adapter 仍須在院內網路以合成／授權測試病例完成 pilot。它不是已核准的醫療器材，也不應自動寫回 EMR。
+> 狀態：`v0.3.1` 是安全導向 portable pilot，修正 Windows 讀取早期民國日期時中斷載入的問題。Demo 與離線測試可用；真實 VGH adapter 仍須在院內網路以合成／授權測試病例完成 pilot。它不是已核准的醫療器材，也不應自動寫回 EMR。
 
 ## 目前功能
 
@@ -20,7 +20,7 @@ WardLens 是給台灣 PGY／住院醫師使用的 Windows 查房輔助工具。�
 
 ## 快速使用
 
-1. 從 [GitHub Releases](https://github.com/YHHuan/wardlens/releases) 下載 `WardLens-Portable.zip`。
+1. [直接下載 v0.3.1 Portable ZIP](https://github.com/YHHuan/wardlens/releases/download/v0.3.1/WardLens-Portable.zip)，或從 [GitHub Releases](https://github.com/YHHuan/wardlens/releases) 選 `WardLens-Portable.zip`。不是「Code → Download ZIP」或 `WardLens-Source.zip`。
 2. 將 ZIP **完整解壓縮**到本機資料夾；不可在 ZIP 預覽內執行，也不可只複製單一 BAT。
 3. 雙擊 `Start-WardLens.bat`。啟動期間保留命令視窗；第一次先勾選「合成資料 Demo」並登入，確認能載入 18 人清單。
 4. 真實環境取消 Demo，輸入入口網帳密；帳密只留在本次記憶體，不會儲存。
@@ -29,6 +29,8 @@ WardLens 是給台灣 PGY／住院醫師使用的 Windows 查房輔助工具。�
 7. 每次先按「建立去識別預覽」，閱讀完整 payload，再送出或複製。
 
 目標電腦不需要安裝 Python、pip 或套件，也不需要系統管理員權限。若沒有出現視窗，雙擊 `Diagnose-WardLens.bat`；它會保留命令視窗並產生不含病歷、帳密、API key 與絕對使用者路徑的 `WardLens-Diagnostics.txt`。
+
+若登入與清單正常，但載入病歷出現「未預期錯誤」，v0.3.1 會顯示操作／例外代碼及 `operation-error.log` 的位置（通常是 `%LOCALAPPDATA%\WardLens`）。該檔只包含版本、錯誤類型與程式位置，不含病歷、帳密、API key、原始回應或例外訊息。請回報這份診斷，不要上傳病歷 HTML。`Diagnose-WardLens.bat` 是離線檢查，無法單憑它確認院內連線正常。
 
 急症頁面的文字框可用 Windows `Win+H` 語音輸入。若病人有 peri-arrest、嚴重呼吸窘迫、休克、意識惡化或大出血，先叫 senior／RRT／Code／ICU，不要等待模型。
 

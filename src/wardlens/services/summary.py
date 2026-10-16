@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from wardlens.models import EMR_TIMEZONE, PatientBundle, SourceRecord
+from wardlens.services.history import coverage_summary, window_description
 
 _todo_pattern = re.compile(
     r"(?i)(?:^|\b)(?:todo|to[- ]?do|pending|follow(?:\s|-)?up|recheck|待辦|追蹤|確認|補|安排)\b"
@@ -49,6 +50,10 @@ def render_bundle_overview(bundle: PatientBundle) -> str:
     lines.extend(["", "近期／Pending 報告："])
     reports = recent_reports(bundle)
     lines.extend([f"- {report}" for report in reports] or ["- 未取得報告索引；不代表沒有報告。"])
+    lines.extend(["", "檢驗／報告歷史範圍：", window_description(bundle)])
+    for source_id, record in bundle.source_map():
+        if record.source_type.startswith("lab_") or record.source_type == "report_index":
+            lines.append(f"- [{source_id}] {record.title}：{coverage_summary(record)}")
     lines.extend(["", "來源稽核："])
     for source_id, record in bundle.source_map():
         observed = (

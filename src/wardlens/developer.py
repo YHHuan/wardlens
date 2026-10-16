@@ -137,6 +137,11 @@ class DeveloperSettingsDialog:
             text="刷新全部模型目錄",
             command=lambda: self._refresh_models(zdr_only=False),
         ).pack(side=tk.LEFT, padx=8)
+        ttk.Button(
+            action,
+            text="模型改用新版內建值（保留 prompt）",
+            command=self._restore_models,
+        ).pack(side=tk.LEFT, padx=8)
         ttk.Label(parent, textvariable=self.status_var, foreground="#555555").grid(
             row=action_row + 1, column=0, columnspan=5, sticky="w", padx=4
         )
@@ -252,17 +257,21 @@ class DeveloperSettingsDialog:
             parent=self.window,
         ):
             return
-        for key, default in DEFAULT_PROFILES.items():
-            model_var, effort_var, tokens_var = self.model_vars[key]
-            model_var.set(default.model)
-            effort_var.set(default.reasoning_effort)
-            tokens_var.set(str(default.max_tokens))
+        self._restore_models()
         self.working_prompts = {
             workflow: self.default_builder.system_prompt(workflow) for workflow in PROMPT_WORKFLOWS
         }
         self.current_workflow = self.prompt_workflow_var.get()
         self.prompt_text.delete("1.0", tk.END)
         self.prompt_text.insert("1.0", self.working_prompts[self.current_workflow])
+
+    def _restore_models(self) -> None:
+        for key, default in DEFAULT_PROFILES.items():
+            model_var, effort_var, tokens_var = self.model_vars[key]
+            model_var.set(default.model)
+            effort_var.set(default.reasoning_effort)
+            tokens_var.set(str(default.max_tokens))
+        self.status_var.set("模型已改為本版建議值；prompt 未變更，按儲存才會套用。")
 
     def _export_config(self) -> None:
         try:

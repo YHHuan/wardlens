@@ -2,7 +2,7 @@
 
 WardLens 是給台灣 PGY／住院醫師使用的 Windows 查房輔助工具。它以唯讀方式整理 VGH EMR 病人清單與選取病人的 admission note、progress note、用藥、檢驗趨勢及報告索引，再由使用者決定是否把「先去識別、再人工預覽」的內容送往 OpenRouter。
 
-> 狀態：`v0.3.1` 是安全導向 portable pilot，修正 Windows 讀取早期民國日期時中斷載入的問題。Demo 與離線測試可用；真實 VGH adapter 仍須在院內網路以合成／授權測試病例完成 pilot。它不是已核准的醫療器材，也不應自動寫回 EMR。
+> 狀態：`v0.4.0` 是安全導向 portable pilot：新增被擋預覽的本機修正流程、更新模型，並預設查詢近三個月的檢驗／報告。院內資料載入已獲使用者回報成功；新增報告明細與各模型實際生成仍需院內／帳戶驗收。它不是已核准的醫療器材，不會自動寫回 EMR。
 
 ## 目前功能
 
@@ -10,9 +10,11 @@ WardLens 是給台灣 PGY／住院醫師使用的 Windows 查房輔助工具。�
 - 只在使用者選取病人後抓詳細內容，不預抓整批病歷。
 - 本機整理最新 admission note 頂端 TODO、近期報告與來源 hash。
 - 產生查房重點、英文 Admission Note、自由提問與成人住院急症處置草稿。
-- `fast`、`deep`、Gemini Flash、Claude 第二意見四種路由。
+- 保留快速整理／急症第一輪與慢速複核，提供 OpenAI、Claude、Gemini 共七條路由。
 - OpenRouter 瀏覽器一鍵登入（OAuth PKCE），不必手打長 key；亦可從剪貼簿貼上一次。
-- 開發者模式可調整五條路由的模型 ID、reasoning、max tokens 與四套 system prompt，並從 OpenRouter 即時載入最新／ZDR 模型目錄。
+- 開發者模式可調整七條路由的模型 ID、reasoning、max tokens 與四套 system prompt，並從 OpenRouter 即時載入最新／ZDR 模型目錄；升級保留自訂模型與 prompt。
+- 預覽遇到疑似長識別碼時，可在本機反白遮罩／修正，再重新檢查；不會直接解除阻擋。
+- 可選近 1／3／6／12 個月回溯，保留累積檢驗日期／欄位；年度報告索引依範圍篩選，最多讀取最新 12 份明細。涵蓋日期與缺漏會列入總覽和 AI input。
 - 開發者設定可匯入／匯出 JSON；不含 API key，但會包含完整自訂 prompt。
 - 一鍵複製「實際去識別 input」到其他 AI；60 秒後只在剪貼簿仍未變更時嘗試清除。
 - 匯出本機 DOCX／CSV patient list；未載入欄位明確標示「不代表沒有資料」。
@@ -20,13 +22,14 @@ WardLens 是給台灣 PGY／住院醫師使用的 Windows 查房輔助工具。�
 
 ## 快速使用
 
-1. [直接下載 v0.3.1 Portable ZIP](https://github.com/YHHuan/wardlens/releases/download/v0.3.1/WardLens-Portable.zip)，或從 [GitHub Releases](https://github.com/YHHuan/wardlens/releases) 選 `WardLens-Portable.zip`。不是「Code → Download ZIP」或 `WardLens-Source.zip`。
+1. [直接下載 v0.4.0 Portable ZIP](https://github.com/YHHuan/wardlens/releases/download/v0.4.0/WardLens-Portable.zip)，或從 [GitHub Releases](https://github.com/YHHuan/wardlens/releases) 選 `WardLens-Portable.zip`。不是「Code → Download ZIP」或 `WardLens-Source.zip`。
 2. 將 ZIP **完整解壓縮**到本機資料夾；不可在 ZIP 預覽內執行，也不可只複製單一 BAT。
 3. 雙擊 `Start-WardLens.bat`。啟動期間保留命令視窗；第一次先勾選「合成資料 Demo」並登入，確認能載入 18 人清單。
 4. 真實環境取消 Demo，輸入入口網帳密；帳密只留在本次記憶體，不會儲存。
-5. 輸入醫師燈號／病房後載入清單，選一名病人，再載入詳細資料。
+5. 輸入醫師燈號／病房後載入清單，選一名病人；左側選回溯月份（預設 3），再載入詳細資料。更改範圍後需重新載入。
 6. 若院方允許外部 AI，到「隱私與模型」啟用外部 AI、確認政策，再按「用瀏覽器登入 OpenRouter」；授權後 key 會自動存進 Windows Credential Manager。
-7. 每次先按「建立去識別預覽」，閱讀完整 payload，再送出或複製。
+7. 可先按「檢查連線／目前模型」確認 key 與公開目錄（不傳病歷、不生成）；再用合成 Demo 測試實際生成。帳戶須有足夠 credits／key 額度。
+8. 每次先按「建立去識別預覽」。若出現本機修正視窗，檢查橘色疑似識別碼、遮罩後按「重新檢查並建立預覽」。閱讀完整 payload，才送出或複製。
 
 目標電腦不需要安裝 Python、pip 或套件，也不需要系統管理員權限。若沒有出現視窗，雙擊 `Diagnose-WardLens.bat`；它會保留命令視窗並產生不含病歷、帳密、API key 與絕對使用者路徑的 `WardLens-Diagnostics.txt`。
 
@@ -38,13 +41,17 @@ WardLens 是給台灣 PGY／住院醫師使用的 Windows 查房輔助工具。�
 
 | 模式 | 預設模型 | 推理 | 建議用途 |
 |---|---|---|---|
-| `fast` | `openai/gpt-5.6-terra` | low | 日常查房整理、TODO、報告摘要 |
-| `emergency_fast` | `openai/gpt-5.6-sol` | low | 急症第一輪、先取得短而可執行的清單 |
-| `deep` | `openai/gpt-5.6-sol` | high | 複雜處置、來源矛盾、第一輪後複核 |
-| `gemini_fast` | `google/gemini-3.7-flash` | low | 低延遲替代模型 |
-| `claude_second` | `anthropic/claude-sonnet-5` | high | 跨模型第二意見 |
+| `fast` | `openai/gpt-6.1-sol` | low | 日常查房整理、TODO、報告摘要 |
+| `emergency_fast` | `openai/gpt-6.1-sol` | low | 急症第一輪；不可等 AI 才處置 |
+| `deep` | `openai/gpt-6-astra` | high | 複雜處置、來源矛盾、第一輪後複核 |
+| `gemini_fast` | `google/gemini-3.8-flash` | low | 快速替代模型 |
+| `claude_second` | `anthropic/claude-sonnet-5.5` | high | 跨模型第二意見 |
+| `claude_deep` | `anthropic/claude-opus-5.5` | high | Claude 深入複核 |
+| `gemini_deep` | `google/gemini-4-argon` | high | Gemini 深入複核 |
 
-實際延遲也受 prompt 長度、OpenRouter provider 與網路影響。急症建議採「Sol/low 先答 → 病人穩定後 Sol/high 或 Claude 複核」，不在第一輪使用長推理阻塞床邊處置。模型 ID 會變動；發行前應用 OpenRouter models API 與 ZDR endpoint API 重驗。
+型號於 **2026-10-16** 依 [OpenAI 官方目錄](https://developers.openai.com/api/docs/models)、[Claude 官方目錄](https://platform.claude.com/docs/en/models/overview)、[Gemini 官方目錄](https://ai.google.dev/gemini-api/docs/models) 與 [OpenRouter 即時模型資料](https://openrouter.ai/api/v1/models) 核對。這不是臨床效能評測；快速／深入是工作流程配置，沒有保證秒數。Anthropic 另有更新的 Fable 5.1，但核對當下沒有 OpenRouter ZDR endpoint，因此不列為本版臨床預設。
+
+急症採「Sol/low 先整理 → 病人穩定後 Astra/high 或跨模型複核」。實際延遲取決於 input 長度、推理預算、provider 與網路。每次送出前會檢查當前模型／reasoning 相容性及 ZDR 目錄，不自動換模型或放寬隱私條件。若已自訂舊模型，請在開發者模式按「模型改用新版內建值（保留 prompt）」再儲存。
 
 OpenAI 官方建議以較低 reasoning effort 壓低延遲，只有在評測顯示有實質收益時提高；OpenRouter 支援 per-request `provider.zdr=true`。WardLens 會先即時檢查該模型是否仍有 ZDR endpoint，檢查失敗就不送出。[OpenAI model guide](https://developers.openai.com/api/docs/guides/latest-model) · [OpenRouter ZDR](https://openrouter.ai/docs/guides/features/zdr)
 
@@ -58,7 +65,7 @@ OpenAI 官方建議以較低 reasoning effort 壓低延遲，只有在評測顯�
 
 在「隱私與模型」啟用後可：
 
-- 編輯 `fast`、`deep`、`emergency_fast`、`gemini_fast`、`claude_second` 的模型 ID、reasoning 與 token 上限。
+- 編輯上述七條路由的模型 ID、reasoning 與 token 上限；可只更新模型並保留 prompt。
 - 即時取得 OpenRouter 全部模型或目前具有 ZDR endpoint 的模型清單。
 - 分別編輯查房、Admission Note、急症與病人問答 prompt；變更後既有 outbound 預覽會立即失效。
 - 回復內建值，或跨電腦匯入／匯出不含 key 的 JSON。
@@ -98,7 +105,10 @@ OpenAI 官方建議以較低 reasoning effort 壓低延遲，只有在評測顯�
 - `resdtable`／`reslist` 不存在時視為介面異常，不回傳空資料。
 - `Error.jsp`／強 block marker 會乾淨停止；正式報告文字中的單字 `blocked` 不會誤判。
 - 病人清單總數不符、重複頁面或達上限時標示 incomplete。
-- 不使用 `resdtmonth=00`；預設 60 個月，設定硬上限 240 個月。
+- 不使用 `resdtmonth=00`；預設 3 個月，介面可選 1／3／6／12 個月。
+- 每次最多 40 個院內請求、最多 12 份最新報告全文；跨年索引分年查詢。遇到未辨識日期、未讀全文、分頁或截短會明示，不能視為完整三個月。
+
+預覽修正、OpenRouter 連線及趨勢限制見 [AI 與歷史資料操作說明](docs/AI_AND_TRENDS.md)。
 
 真實 pilot 步驟見 [docs/VGH_PILOT.md](docs/VGH_PILOT.md)。
 

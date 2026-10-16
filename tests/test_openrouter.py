@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 from urllib.parse import parse_qs, urlparse
 from urllib.request import urlopen
@@ -24,7 +25,12 @@ def test_nonstream_payload_omits_null_stream_options() -> None:
         stream=False,
     )
     assert "stream_options" not in payload
-    assert payload["provider"] == {"zdr": True, "allow_fallbacks": False}
+    assert payload["provider"] == {
+        "zdr": True,
+        "allow_fallbacks": False,
+        "data_collection": "deny",
+        "require_parameters": True,
+    }
     assert payload["reasoning"] == {"effort": "low", "exclude": True}
 
 
@@ -39,6 +45,9 @@ def test_stream_payload_requests_usage() -> None:
 
 
 class _Response:
+    ok = True
+    status_code = 200
+
     def __init__(self, payload: dict[str, object]) -> None:
         self.payload = payload
 
@@ -47,6 +56,15 @@ class _Response:
 
     def json(self) -> dict[str, object]:
         return self.payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def iter_lines(self, **_kwargs):
+        yield from self.payload.get("lines", [])
 
 
 class _Session:
@@ -169,3 +187,136 @@ def test_oauth_loopback_connect_uses_one_time_code(monkeypatch) -> None:
     monkeypatch.setattr("wardlens.llm.oauth.webbrowser.open", fake_open)
     key = OpenRouterOAuth(session=OAuthSession()).connect(timeout_seconds=2)
     assert key.startswith("sk-or-v1-")
+
+
+class _CatalogSession:
+    def __init__(self, response=None):
+        self.gets = []
+        self.posts = []
+        self.response = response
+
+    def get(self, url, **kwargs):
+        from wardlens.config import DEFAULT_PROFILES
+
+        self.gets.append((url, kwargs))
+        if url.endswith("/auth/key"):
+            return _Response({"data": {}})
+        if url.endswith("/endpoints/zdr"):
+            return _Response({"data": [{"model_id": p.model} for p in DEFAULT_PROFILES.values()]})
+        assert url.endswith("/models")
+        return _Response(
+            {
+                "data": [
+                    {
+                        "id": p.model,
+                        "supported_parameters": ["reasoning", "max_tokens"],
+                        "reasoning": {"mandatory": True, "supported_efforts": ["low", "high"]},
+                    }
+                    for p in DEFAULT_PROFILES.values()
+                ]
+            }
+        )
+
+    def post(self, url, **kwargs):
+        self.posts.append((url, kwargs))
+        assert self.response is not None
+        return self.response
+
+
+def test_connection_check_is_get_only_and_validates_all_routes() -> None:
+    from wardlens.config import DEFAULT_PROFILES
+
+    session = _CatalogSession()
+    report = OpenRouterClient(session).check_connection(
+        "synthetic-key",
+        list(DEFAULT_PROFILES.values()),
+        require_zdr=True,
+    )
+    assert not session.posts
+    assert len(session.gets) == 3
+    assert "待修正" not in report
+    assert "不代表帳戶餘額" in report
+    assert "synthetic-key" not in report
+    for url, kwargs in session.gets:
+        if not url.endswith("/auth/key"):
+            assert "headers" not in kwargs  # no key on public catalog calls
+        assert "json" not in kwargs
+
+
+@pytest.mark.parametrize("effort", ["none", "max"])
+def test_incompatible_effort_blocks_before_paid_request(effort) -> None:
+    from dataclasses import replace
+
+    from wardlens.config import DEFAULT_PROFILES
+
+    session = _CatalogSession()
+    profile = replace(DEFAULT_PROFILES["fast"], reasoning_effort=effort)
+    with pytest.raises(OpenRouterError, match="不支援"):
+        OpenRouterClient(session).complete("test", PromptEnvelope("sys", "user"), profile)
+    assert not session.posts
+
+
+def _stream_lines(reason="stop", done=True, text="synthetic answer"):
+    if text:
+        yield "data: " + json.dumps({"choices": [{"delta": {"content": text}}]})
+    if reason:
+        yield "data: " + json.dumps({"choices": [{"delta": {}, "finish_reason": reason}]})
+    yield 'data: {"choices": [], "usage": {"completion_tokens": 10}}'
+    if done:
+        yield "data: [DONE]"
+
+
+@pytest.mark.parametrize(
+    "reason,done,text",
+    [
+        ("length", True, ""),
+        ("length", True, "partial"),
+        (None, True, "partial"),
+        ("stop", False, "partial"),
+        ("content_filter", True, "partial"),
+    ],
+)
+def test_incomplete_stream_never_emits_done(reason, done, text) -> None:
+    from wardlens.config import DEFAULT_PROFILES
+
+    session = _CatalogSession(_Response({"lines": list(_stream_lines(reason, done, text))}))
+    events = []
+    with pytest.raises(OpenRouterError):
+        for event in OpenRouterClient(session).stream(
+            "test",
+            PromptEnvelope("sys", "user"),
+            DEFAULT_PROFILES["fast"],
+        ):
+            events.append(event)
+    assert not any(e.done for e in events)
+
+
+def test_complete_stream_preserves_usage_only_chunk() -> None:
+    from wardlens.config import DEFAULT_PROFILES
+
+    session = _CatalogSession(_Response({"lines": list(_stream_lines())}))
+    events = list(
+        OpenRouterClient(session).stream(
+            "test",
+            PromptEnvelope("sys", "user"),
+            DEFAULT_PROFILES["fast"],
+        )
+    )
+    assert events[-1].done
+    assert any(e.usage == {"completion_tokens": 10} for e in events)
+
+
+def test_nonstream_truncation_is_not_a_completed_answer() -> None:
+    from wardlens.config import DEFAULT_PROFILES
+
+    session = _CatalogSession(
+        _Response(
+            {
+                "choices": [{"message": {"content": "partial"}, "finish_reason": "length"}],
+            }
+        )
+    )
+    with pytest.raises(OpenRouterError, match="tokens 上限"):
+        OpenRouterClient(session).complete(
+            "test", PromptEnvelope("sys", "user"), DEFAULT_PROFILES["fast"]
+        )

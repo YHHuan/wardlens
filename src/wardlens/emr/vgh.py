@@ -8,7 +8,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
-from urllib.parse import urlencode, urljoin, urlparse
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup, Tag
@@ -28,6 +28,13 @@ from wardlens.models import (
     PatientListResult,
     PatientSummary,
     SourceRecord,
+)
+from wardlens.services.history import (
+    TRUNCATION_MARKER,
+    bounded_source,
+    months_before,
+    normalize_result_date,
+    source_dates,
 )
 
 
@@ -288,11 +295,12 @@ class VGHReadOnlyAdapter:
 
     def fetch_patient_bundle(self, patient: PatientSummary) -> PatientBundle:
         self._require_login()
-        bundle = PatientBundle(patient=patient)
-        budget = _RequestBudget(maximum=20)
+        months = max(1, min(int(self.settings.lab_lookback_months), 12))
+        bundle = PatientBundle(patient=patient, lookback_months=months)
+        budget = _RequestBudget(maximum=40)
         self._enter_patient_context(patient, budget)
         case_no = patient.case_no or self._resolve_case_no(patient, budget)
-        lookback = str(max(1, min(self.settings.lab_lookback_months, 240)))
+        lookback = str(months)
         specs = (
             ("profile", "基本資料", self._url("findPba", histno=patient.histno), None, None),
             (
@@ -324,13 +332,6 @@ class VGHReadOnlyAdapter:
                 None,
                 "resdtable",
             ),
-            (
-                "report_index",
-                "近期報告索引",
-                self._url("findRes", tdept="ALL", histno=patient.histno),
-                None,
-                "reslist",
-            ),
         )
         failed_types: set[str] = set()
         for source_type, title, url, preferred_link_title, expected_id in specs:
@@ -346,6 +347,10 @@ class VGHReadOnlyAdapter:
                 )
                 if record:
                     bundle.add_record(record)
+                    if TRUNCATION_MARKER in record.content:
+                        bundle.warnings.append(
+                            f"{title}：超過來源容量，已標記截短；不可視為完整趨勢。"
+                        )
                     if record.status == "empty_unverified":
                         bundle.warnings.append(
                             f"{title}：結構存在但沒有可讀資料列；請回原始 EMR 核對。"
@@ -361,6 +366,13 @@ class VGHReadOnlyAdapter:
             ) as exc:
                 failed_types.add(source_type)
                 bundle.warnings.append(f"{title}：{self._safe_error(exc)}")
+        try:
+            self._fetch_report_history(bundle, budget)
+        except LoginError:
+            raise
+        except (EMRError, requests.RequestException, ValueError, AttributeError, KeyError) as exc:
+            failed_types.add("report_index")
+            bundle.warnings.append(f"歷史報告：{self._safe_error(exc)}")
         if not bundle.records:
             raise IncompleteFetchError("沒有取得任何臨床資料；請勿把空白視為無異常。")
         if {"lab_chemistry", "lab_cbc"}.issubset(failed_types):
@@ -368,6 +380,133 @@ class VGHReadOnlyAdapter:
         if "report_index" in failed_types:
             bundle.warnings.append("報告索引未通過內容檢查；不可解讀為沒有 pending／新報告。")
         return bundle
+
+    def _fetch_report_history(self, bundle: PatientBundle, budget: _RequestBudget) -> None:
+        """Known yearly index route; follow only returned same-origin report links."""
+        end = bundle.fetched_at.astimezone(EMR_TIMEZONE).date()
+        start = months_before(end, bundle.lookback_months or 3)
+        candidates: dict[str, tuple[datetime, str]] = {}
+        unknown_dates = 0
+        for year in range(end.year, start.year - 1, -1):
+            budget.consume()
+            page = self._get(
+                self._url(
+                    "findRes",
+                    histno=bundle.patient.histno,
+                    tmonth=str(year),
+                    tdept="ALL",
+                )
+            )
+            soup = BeautifulSoup(page.text, "html.parser")
+            table = soup.find(id="reslist")
+            if table is None:
+                raise InterfaceChangedError("年度報告索引缺少 #reslist。")
+            headers = [clean_text(cell.get_text(" ", strip=True)) for cell in table.find_all("th")]
+            date_column = next(
+                (
+                    i
+                    for i, header in enumerate(headers)
+                    if re.search(r"報告日期|報告時間|report.*date", header, re.I)
+                ),
+                4,
+            )
+            lines = ["\t".join(headers)] if headers else []
+            for row in table.find_all("tr"):
+                cells = [clean_text(cell.get_text(" ", strip=True)) for cell in row.find_all("td")]
+                if not cells:
+                    continue
+                if len(cells) > date_column:
+                    cells[date_column] = normalize_result_date(cells[date_column])
+                dates = source_dates(cells[date_column]) if len(cells) > date_column else []
+                if not dates:
+                    unknown_dates += 1
+                    # Keep unknown dates visible, never call them outside the window.
+                    lines.append("[DATE UNKNOWN] " + "\t".join(cells))
+                    continue
+                day = dates[0]
+                if not start <= day <= end:
+                    continue
+                lines.append("\t".join(cells))
+                anchor = row.find("a", href=True)
+                if anchor is None:
+                    continue
+                url = urljoin(page.url, str(anchor["href"]))
+                # Only report links returned by the report index; no generic navigation or writes.
+                parsed = urlparse(url)
+                linked_ids = parse_qs(parsed.query).get("histno", [])
+                if (
+                    not same_origin_https(url, self.allowed_hosts)
+                    or not parsed.path.startswith("/emr/")
+                    or (linked_ids and linked_ids != [bundle.patient.histno])
+                    or re.search(
+                        r"(?:delete|update|insert|save|submit|logout)",
+                        parsed.path + "?" + parsed.query,
+                        re.I,
+                    )
+                    or str(anchor["href"]).startswith(("#", "javascript:"))
+                ):
+                    bundle.warnings.append("有報告明細連結不符合唯讀院內路徑，已略過。")
+                    continue
+                candidates.setdefault(
+                    url, (datetime(day.year, day.month, day.day, tzinfo=EMR_TIMEZONE), cells[0])
+                )
+            index_text = "\n".join(lines)
+            bundle.add_record(
+                SourceRecord(
+                    source_type="report_index",
+                    title=f"{year} 年報告索引（回溯範圍內）",
+                    content=bounded_source(
+                        index_text or "[No readable report rows; verify in EMR.]", 200000
+                    ),
+                    source_url=page.url,
+                    source_record_id=sha256(page.url.encode()).hexdigest()[:20],
+                    status="index_only" if lines else "empty_unverified",
+                )
+            )
+            # An annual index is not proof that server-side paging was exhausted.
+            if soup.find("a", attrs={"rel": "next"}) or soup.find(
+                "a", string=re.compile(r"下一頁|Next", re.I)
+            ):
+                bundle.warnings.append("年度報告索引含下一頁；尚未取得後續頁，歷史範圍不完整。")
+        if unknown_dates:
+            bundle.warnings.append(
+                f"{unknown_dates} 列報告日期未辨識；已保留索引，但未假定屬於回溯範圍。"
+            )
+        ordered = sorted(candidates.items(), key=lambda item: item[1][0], reverse=True)
+        loaded = 0
+        for url, (when, title) in ordered[:12]:
+            try:
+                budget.consume()
+                page = self._get(url)
+                soup = BeautifulSoup(page.text, "html.parser")
+                detail = soup.find(id=re.compile(r"^RSCONTENT$", re.I)) or soup.find("pre")
+                if detail is None:
+                    raise InterfaceChangedError(
+                        "明細缺少 RSCONTENT／pre，不能把選擇頁視為報告全文。"
+                    )
+                content = self._extract_clinical_text(BeautifulSoup(str(detail), "html.parser"))
+                if not content:
+                    raise InterfaceChangedError("明細沒有可讀報告文字。")
+                bundle.add_record(
+                    SourceRecord(
+                        source_type="report",
+                        title=title,
+                        content=content,
+                        source_url=page.url,
+                        source_record_id=sha256(page.url.encode()).hexdigest()[:20],
+                        observed_at=when,
+                        status="status_unverified",
+                    )
+                )
+                loaded += 1
+            except LoginError:
+                raise
+            except (EMRError, requests.RequestException) as exc:
+                bundle.warnings.append(f"報告明細：{self._safe_error(exc)}")
+        bundle.warnings.append(
+            f"回溯報告索引可追蹤 {len(ordered)} 個明細連結，已讀取 {loaded} 份全文（每次最多 12 份，優先最新）；"
+            "索引不是全文，未載入／未列出不等於沒有報告。報告 final／pending 需核對原文。"
+        )
 
     def _fetch_record(
         self,
@@ -437,7 +576,11 @@ class VGHReadOnlyAdapter:
             else:
                 raise InterfaceChangedError("頁面存在但找不到可讀內容。")
         # Profile dates commonly describe birth, not when this source was recorded.
-        observed_at = None if source_type == "profile" else self._first_date(content)
+        observed_at = (
+            None
+            if source_type in {"profile", "lab_chemistry", "lab_cbc", "report_index"}
+            else self._first_date(content)
+        )
         record_id = sha256(final_page.url.encode("utf-8")).hexdigest()[:20]
         return SourceRecord(
             source_type=source_type,
@@ -645,20 +788,35 @@ class VGHReadOnlyAdapter:
     def _extract_clinical_text(soup: BeautifulSoup) -> str:
         for unwanted in soup.find_all(["script", "style", "nav"]):
             unwanted.decompose()
-        preferred = soup.find("pre") or soup.find(
-            id=re.compile(r"RSCONTENT|resdtable|udorder|tprlist", re.I)
-        )
-        if preferred is not None:
-            if preferred.name == "table" or preferred.find("table"):
-                table = preferred if preferred.name == "table" else preferred.find("table")
-                content = table_to_tsv(table)
-            else:
-                content = preferred.get_text("\n", strip=True)
+        preferred = soup.find(
+            id=re.compile(r"RSCONTENT|resdtable|reslist|udorder|tprlist", re.I)
+        ) or soup.find("pre")
+        container = preferred if preferred is not None else soup
+        if container.get("id", "").lower() == "resdtable":
+            # Known cumulative-result layout: first data cell is result date.
+            # Normalize compact / YY dates here before residual identifier scans,
+            # not by interpreting every long number in clinical text as a date.
+            for row in container.find_all("tr"):
+                cells = row.find_all("td", recursive=False)
+                targets = cells[:1] if cells else row.find_all("th", recursive=False)
+                for cell in targets:
+                    original = clean_text(cell.get_text(" ", strip=True))
+                    normalized = normalize_result_date(original)
+                    if normalized != original:
+                        cell.clear()
+                        cell.append(normalized)
+        if container.name == "table":
+            content = table_to_tsv(container)
         else:
-            table = soup.find("table")
-            content = table_to_tsv(table) if table else soup.get_text("\n", strip=True)
-        lines = [clean_text(line) for line in content.splitlines() if clean_text(line)]
-        return "\n".join(lines)[:30000]
+            # Preserve narrative and every top-level table, not just the first
+            # header table on a report page. Child tables are handled by parents.
+            for table in list(container.find_all("table")):
+                if table.find_parent("table") is None:
+                    table.replace_with("\n" + table_to_tsv(table) + "\n")
+            content = container.get_text("\n", strip=True)
+        # Do not collapse TSV separators: they bind dates, results and units.
+        lines = [line.strip() for line in content.splitlines() if line.strip()]
+        return bounded_source("\n".join(lines), 200000)
 
     @staticmethod
     def _first_date(text: str) -> datetime | None:

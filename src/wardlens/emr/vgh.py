@@ -29,7 +29,13 @@ from wardlens.models import (
     PatientSummary,
     SourceRecord,
 )
-from wardlens.services.history import TRUNCATION_MARKER, bounded_source, months_before, source_dates
+from wardlens.services.history import (
+    TRUNCATION_MARKER,
+    bounded_source,
+    months_before,
+    normalize_result_date,
+    source_dates,
+)
 
 
 @dataclass(slots=True)
@@ -409,6 +415,8 @@ class VGHReadOnlyAdapter:
                 cells = [clean_text(cell.get_text(" ", strip=True)) for cell in row.find_all("td")]
                 if not cells:
                     continue
+                if len(cells) > date_column:
+                    cells[date_column] = normalize_result_date(cells[date_column])
                 dates = source_dates(cells[date_column]) if len(cells) > date_column else []
                 if not dates:
                     unknown_dates += 1
@@ -784,6 +792,19 @@ class VGHReadOnlyAdapter:
             id=re.compile(r"RSCONTENT|resdtable|reslist|udorder|tprlist", re.I)
         ) or soup.find("pre")
         container = preferred if preferred is not None else soup
+        if container.get("id", "").lower() == "resdtable":
+            # Known cumulative-result layout: first data cell is result date.
+            # Normalize compact / YY dates here before residual identifier scans,
+            # not by interpreting every long number in clinical text as a date.
+            for row in container.find_all("tr"):
+                cells = row.find_all("td", recursive=False)
+                targets = cells[:1] if cells else row.find_all("th", recursive=False)
+                for cell in targets:
+                    original = clean_text(cell.get_text(" ", strip=True))
+                    normalized = normalize_result_date(original)
+                    if normalized != original:
+                        cell.clear()
+                        cell.append(normalized)
         if container.name == "table":
             content = table_to_tsv(container)
         else:

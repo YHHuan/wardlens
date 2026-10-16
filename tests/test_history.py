@@ -8,7 +8,12 @@ from wardlens.emr.parsers import table_to_tsv
 from wardlens.emr.vgh import VGHReadOnlyAdapter, _FetchedPage, _RequestBudget
 from wardlens.llm.prompts import PromptBuilder
 from wardlens.models import EMR_TIMEZONE, PatientBundle, PatientSummary, SourceRecord
-from wardlens.services.history import TRUNCATION_MARKER, coverage_summary, months_before
+from wardlens.services.history import (
+    TRUNCATION_MARKER,
+    coverage_summary,
+    months_before,
+    normalize_result_date,
+)
 from wardlens.services.summary import render_bundle_overview
 
 
@@ -32,6 +37,26 @@ def test_report_narrative_and_all_tables_are_preserved():
     text = VGHReadOnlyAdapter._extract_clinical_text(soup)
     assert "Findings:" in text and "Impression:" in text
     assert "Comparison\t2026/07/17" in text
+
+
+def test_result_date_cells_normalize_without_reclassifying_arbitrary_codes():
+    from wardlens.security.deidentify import Deidentifier
+
+    assert normalize_result_date("26/10/16") == "2026-10-16"
+    assert normalize_result_date("1151016 08:30") == "2026-10-16 08:30"
+    assert normalize_result_date("20261016") == "2026-10-16"
+    assert normalize_result_date("26/02/30") == "26/02/30"
+    soup = BeautifulSoup(
+        """<table id='resdtable'><tr><th>Date</th><th>Creatinine</th><th>Code</th></tr>
+    <tr><td>1150717</td><td>1.0 mg/dL</td><td>20261017</td></tr>
+    <tr><td>26/10/16 09:00</td><td>1.8 mg/dL</td><td>87654321</td></tr></table>""",
+        "html.parser",
+    )
+    text = VGHReadOnlyAdapter._extract_clinical_text(soup)
+    assert "2026-07-17\t1.0" in text and "2026-10-16 09:00\t1.8" in text
+    assert "20261017" in text  # code column is not interpreted as a date
+    result = Deidentifier().deidentify(text)
+    assert any(f.kind == "possible_long_identifier" for f in result.residual_risks)
 
 
 def test_table_dates_and_units_stay_aligned_with_merged_headers():

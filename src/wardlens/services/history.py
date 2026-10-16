@@ -9,6 +9,37 @@ from wardlens.models import EMR_TIMEZONE, PatientBundle, SourceRecord
 TRUNCATION_MARKER = "[SOURCE TRUNCATED: omitted content; trend/coverage is incomplete]"
 
 
+def normalize_result_date(value: str) -> str:
+    """Only for known QEMR result-date cells, never arbitrary long numbers.
+
+    Result tables use YY as Gregorian, YYY as ROC, and YYYY as Gregorian.
+    Other EMR date fields have different semantics and must not use this helper.
+    """
+    match = re.fullmatch(
+        r"\s*(\d{2,4})[-/.](\d{1,2})[-/.](\d{1,2})(\s+\d{1,2}:\d{2}(?::\d{2})?)?\s*",
+        value,
+    )
+    if match:
+        year_text, month_text, day_text, clock = match.groups()
+    else:
+        compact = re.fullmatch(
+            r"\s*(\d{3,4})(\d{2})(\d{2})(\s+\d{1,2}:\d{2}(?::\d{2})?)?\s*", value
+        )
+        if not compact:
+            return value
+        year_text, month_text, day_text, clock = compact.groups()
+    year, month, day = int(year_text), int(month_text), int(day_text)
+    if len(year_text) == 2:
+        year += 2000 if year < 70 else 1900
+    elif len(year_text) == 3:
+        year += 1911
+    try:
+        parsed = date(year, month, day)
+    except ValueError:
+        return value
+    return parsed.isoformat() + (clock or "")
+
+
 def months_before(day: date, months: int) -> date:
     index = day.year * 12 + day.month - 1 - months
     year, month = divmod(index, 12)

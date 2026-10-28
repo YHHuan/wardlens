@@ -320,7 +320,6 @@ class OpenRouterClient:
         payload: dict[str, object] = {
             "model": profile.model,
             "messages": envelope.messages(),
-            "max_tokens": profile.max_tokens,
             "reasoning": {"effort": profile.reasoning_effort, "exclude": True},
             "provider": {
                 "zdr": require_zdr,
@@ -330,6 +329,8 @@ class OpenRouterClient:
             },
             "stream": stream,
         }
+        if profile.max_tokens is not None:
+            payload["max_tokens"] = profile.max_tokens
         if stream:
             payload["stream_options"] = {"include_usage": True}
         return payload
@@ -340,8 +341,8 @@ class OpenRouterClient:
             return
         if reason == "length":
             raise OpenRouterError(
-                "已達 tokens 上限，回答可能被截斷或推理用完額度。"
-                "請縮小問題、降低 reasoning 或在開發者模式提高 max tokens 後重新生成；"
+                "已達本次模型的 tokens 上限，回答可能被截斷或推理用完額度。"
+                "供應商預設仍有上限；可在開發者模式指定較高額度，或縮小問題／降低 reasoning 再重試。"
                 "不可把本次片段當成完整處置。"
             )
         raise OpenRouterError("模型沒有正常完成文字回答；內容不完整，請重新生成或更換模型。")

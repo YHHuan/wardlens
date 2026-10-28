@@ -92,6 +92,7 @@ class DeveloperSettingsDialog:
             text=(
                 "傳輸端固定為 OpenRouter；模型 ID 可直接輸入或從即時目錄選取。"
                 "勾選 ZDR 時，刷新只顯示目前具有 ZDR endpoint 的模型。"
+                " Max tokens 留白或填 0：程式不額外限額；供應商／模型仍有上限。"
             ),
             wraplength=1000,
         ).grid(row=0, column=0, columnspan=5, sticky="w", pady=(0, 10))
@@ -102,7 +103,7 @@ class DeveloperSettingsDialog:
             current = self.settings.profile(key)
             model_var = tk.StringVar(value=current.model)
             effort_var = tk.StringVar(value=current.reasoning_effort)
-            tokens_var = tk.StringVar(value=str(current.max_tokens))
+            tokens_var = tk.StringVar(value=str(current.max_tokens) if current.max_tokens is not None else "")
             self.model_vars[key] = (model_var, effort_var, tokens_var)
             ttk.Label(parent, text=f"{key}\n{default.label}").grid(
                 row=row, column=0, sticky="w", padx=4, pady=5
@@ -270,7 +271,7 @@ class DeveloperSettingsDialog:
             model_var, effort_var, tokens_var = self.model_vars[key]
             model_var.set(default.model)
             effort_var.set(default.reasoning_effort)
-            tokens_var.set(str(default.max_tokens))
+            tokens_var.set(str(default.max_tokens) if default.max_tokens is not None else "")
         self.status_var.set("模型已改為本版建議值；prompt 未變更，按儲存才會套用。")
 
     def _export_config(self) -> None:
@@ -322,7 +323,7 @@ class DeveloperSettingsDialog:
             model_var, effort_var, tokens_var = self.model_vars[key]
             model_var.set(profile.model)
             effort_var.set(profile.reasoning_effort)
-            tokens_var.set(str(profile.max_tokens))
+            tokens_var.set(str(profile.max_tokens) if profile.max_tokens is not None else "")
         builder = PromptBuilder(overrides=candidate.custom_prompts)
         self.working_prompts = {
             workflow: builder.system_prompt(workflow) for workflow in PROMPT_WORKFLOWS

@@ -2,7 +2,7 @@
 
 WardLens 是給台灣 PGY／住院醫師使用的 Windows 查房輔助工具。它以唯讀方式整理 VGH EMR 病人清單與選取病人的 admission note、progress note、用藥、檢驗趨勢及報告索引，再由使用者決定是否把「先去識別、再人工預覽」的內容送往 OpenRouter。
 
-> 狀態：`v0.5.0` 是 portable pilot：修正中文串流誤判損毀，查房／病歷與急症頁改為可編輯的「資料＋問題＋回答」。背景 prompt 預設收合，送出前仍須檢查去識別資料。預設保留近三個月檢驗／報告；模型與自訂設定沿用 v0.4。院內資料載入已獲使用者回報成功；實際帳戶生成仍須驗收。它不是已核准的醫療器材，不會自動寫回 EMR。
+> 狀態：`v0.6.0` 是 portable pilot：新增可雙擊的 `WardLens.exe`、本次住院 TPR 生命徵象來源與獨立瀏覽器測試，並移除程式預設的輸出 token 額度。保留 v0.5 中文串流修正、「資料＋問題＋回答」介面及近三個月檢驗／報告。使用者已回報既有資料載入與 AI 可使用；新增 TPR 與院內瀏覽器相容性仍待實機回報。它不是已核准的醫療器材，不會自動寫回 EMR。
 
 ## 目前功能
 
@@ -17,6 +17,9 @@ WardLens 是給台灣 PGY／住院醫師使用的 Windows 查房輔助工具。�
 - 開發者模式可調整七條路由的模型 ID、reasoning、max tokens 與四套 system prompt，並從 OpenRouter 即時載入最新／ZDR 模型目錄；升級保留自訂模型與 prompt。
 - 預覽遇到疑似長識別碼時，可在本機反白遮罩／修正，再重新檢查；不會直接解除阻擋。
 - 可選近 1／3／6／12 個月回溯，保留累積檢驗日期／欄位；年度報告索引依範圍篩選，最多讀取最新 12 份明細。涵蓋日期與缺漏會列入總覽和 AI input。
+- 另讀本次住院 TPR 表，保留生命徵象時間與欄位；缺少 BP／HR／T／RR／SpO₂ 或日期會明示，舊數值不代表現在狀況。
+- 預設不傳 `max_tokens`，由供應商決定額度；開發者模式仍可手動設定。舊版內建額度會遷移，模型／prompt 保留。
+- 「瀏覽器測試」以 Edge／WebDriver 開啟本機合成頁，測試中文、18 列表格與動態更新，並可儲存不含病歷的診斷紀錄。這是 Selenium 前置測試，尚未替換 EMR 擷取。
 - 開發者設定可匯入／匯出 JSON；不含 API key，但會包含完整自訂 prompt。
 - 一鍵複製「實際去識別 input」到其他 AI；60 秒後只在剪貼簿仍未變更時嘗試清除。
 - 匯出本機 DOCX／CSV patient list；未載入欄位明確標示「不代表沒有資料」。
@@ -24,9 +27,9 @@ WardLens 是給台灣 PGY／住院醫師使用的 Windows 查房輔助工具。�
 
 ## 快速使用
 
-1. [直接下載 v0.5.0 Portable ZIP](https://github.com/YHHuan/wardlens/releases/download/v0.5.0/WardLens-Portable.zip)，或從 [GitHub Releases](https://github.com/YHHuan/wardlens/releases) 選 `WardLens-Portable.zip`。不是「Code → Download ZIP」或 `WardLens-Source.zip`。
-2. 將 ZIP **完整解壓縮**到本機資料夾；不可在 ZIP 預覽內執行，也不可只複製單一 BAT。
-3. 雙擊 `Start-WardLens.bat`。啟動期間保留命令視窗；第一次先勾選「合成資料 Demo」並登入，確認能載入 18 人清單。
+1. [直接下載 v0.6.0 Portable ZIP（含 WardLens.exe）](https://github.com/YHHuan/wardlens/releases/download/v0.6.0/WardLens-Portable.zip)，或從 [GitHub Releases](https://github.com/YHHuan/wardlens/releases) 選 `WardLens-Portable.zip`。不是「Code → Download ZIP」或 `WardLens-Source.zip`。
+2. 將 ZIP **完整解壓縮**到本機資料夾；`WardLens.exe`、`runtime`、`app`、`packages` 必須放在一起，不可只複製單一 EXE／BAT。
+3. 雙擊 **`WardLens.exe`**。第一次先勾選「合成資料 Demo」並登入，確認能載入 18 人清單。若需查看啟動訊息，可用同包的 `Start-WardLens.bat`。
 4. 真實環境取消 Demo，輸入入口網帳密；帳密只留在本次記憶體，不會儲存。
 5. 輸入醫師燈號／病房後載入清單，選一名病人；左側選回溯月份（預設 3），再載入詳細資料。更改範圍後需重新載入。
 6. 若院方允許外部 AI，到「隱私與模型」啟用外部 AI、確認政策，再按「用瀏覽器登入 OpenRouter」；授權後 key 會自動存進 Windows Credential Manager。
@@ -34,7 +37,7 @@ WardLens 是給台灣 PGY／住院醫師使用的 Windows 查房輔助工具。�
 8. 在 AI 頁左框編輯病人資料，右框填問題／目前病況，下方看回答。背景 prompt 不必操作；需要修改時進開發者模式。
 9. 按「送出 AI」或「檢查送出資料…」，閱讀去識別預覽。疑似識別碼會開啟本機修正視窗，遮罩後重新檢查；背景 prompt／完整 input 可展開核對。確認預覽後，仍會再確認模型與外部傳送。
 
-從舊版升級請關閉舊視窗，將新 ZIP 解壓縮到另一個資料夾，再確認標題顯示 `0.5.0`。API key、自訂模型與 prompt 沿用原本的本機設定；病歷草稿只在記憶體，不會搬到新版或自動存檔。
+從舊版升級請關閉舊視窗，將新 ZIP 解壓縮到另一個資料夾，再確認標題顯示 `0.6.0`。API key、自訂模型與 prompt 沿用原本的本機設定；病歷草稿只在記憶體，不會搬到新版或自動存檔。
 
 目標電腦不需要安裝 Python、pip 或套件，也不需要系統管理員權限。若沒有出現視窗，雙擊 `Diagnose-WardLens.bat`；它會保留命令視窗並產生不含病歷、帳密、API key 與絕對使用者路徑的 `WardLens-Diagnostics.txt`。
 
@@ -92,11 +95,13 @@ OpenAI 官方建議以較低 reasoning effort 壓低延遲，只有在評測顯�
 
 完整威脅模型見 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)。
 
-## 為什麼改成 BAT portable package
+## EXE 與 portable package
 
 實際比對可運作的 `vgh-psy-extract` 後，關鍵不是 BAT 本身能繞過防護：BAT 最後仍啟動一份 Python。它使用 Python Software Foundation 官方發行的 runtime，而舊 WardLens one-file／onedir 則含每次 build 都會改變、且沒有可信 publisher 的 PyInstaller executable。院內端點政策很可能在 Python process 啟動前就封鎖後者，因此 WardLens 看起來「完全沒反應」，也來不及寫 Python 錯誤紀錄。
 
-`v0.3.0` 改為同樣易稽核的分層方式：可閱讀的 BAT 只呼叫 ZIP 內的 PSF 官方 `python.exe`，完整 runtime ZIP 先以 python.org SPDX 所列 SHA-256 驗證，CI 再驗證 `python.exe`、`pythonw.exe`、`python314.dll` 的 Authenticode publisher。WardLens 與第三方套件只有 `.py`／resource 檔，且第三方 pure-Python wheels 全部鎖版本與 SHA-256；目標電腦不執行 PowerShell、安裝程式、pip、下載器或 execution-policy bypass。
+`v0.3.0` 起使用官方 PSF runtime：完整 runtime ZIP 先以 python.org SPDX 所列 SHA-256 驗證，CI 再驗證 `python.exe`、`pythonw.exe`、`python314.dll` 的 Authenticode publisher。應用邏輯與第三方套件都是 `.py`／resource，第三方 pure-Python wheels 全部鎖版本與 SHA-256。
+
+`v0.6.0` 的 `WardLens.exe` 是從本 repo C 原始碼編譯的小型啟動器，只以明確路徑啟動同包的官方 `pythonw.exe`，不解壓到暫存目錄、不安裝、不下載、不呼叫 shell，也不需要管理員權限。BAT 保留為啟動與診斷備援。**專案啟動器尚未有 Authenticode 簽章；PSF 的簽章只涵蓋其 runtime**，不能因此保證院內一定放行。編譯來源、launcher SHA-256 和 runtime 來源記在 `BUILD_PROVENANCE.txt`。
 
 這會大幅減少未知 executable，但不能保證任何特定醫院政策一定放行。若仍被阻擋，應把 Release 的 `SHA256SUMS.txt`、`BUILD_PROVENANCE.txt` 與診斷結果交給院內 IT 做 publisher／hash allowlist；不要停用 Defender 或規避政策。
 
@@ -116,6 +121,12 @@ OpenAI 官方建議以較低 reasoning effort 壓低延遲，只有在評測顯�
 預覽修正、OpenRouter 連線及趨勢限制見 [AI 與歷史資料操作說明](docs/AI_AND_TRENDS.md)。
 
 真實 pilot 步驟見 [docs/VGH_PILOT.md](docs/VGH_PILOT.md)。
+
+## 瀏覽器測試與回傳紀錄
+
+開啟「瀏覽器測試」→「執行本機瀏覽器測試」→「儲存診斷紀錄…」，將 `WardLens-Browser-Diagnostics.txt` 回傳即可。先檢查 Edge／驅動版本；未準備驅動或版本不合仍會產生紀錄。
+
+首次可在自己的連網電腦按「從 Microsoft 準備驅動（需外網）」，再把完整資料夾帶到自己的院內電腦測試。公開 ZIP 不含 Microsoft WebDriver，因其附帶 EULA 限制重新散布。準備動作明確從 Microsoft 下載並核對 SHA-256，不安裝或更改系統政策。測試本身只用新的暫時設定檔與合成頁，不登入醫院。PASS 尚不代表院內 EMR 可操作，也不能保證不被辨識或阻擋；完整步驟與代碼見 [docs/BROWSER_TEST.md](docs/BROWSER_TEST.md)。
 
 ## 開發
 

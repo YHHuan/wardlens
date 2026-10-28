@@ -54,11 +54,14 @@ $RuntimeDir = Join-Path $PackageRoot "runtime"
 $AppDir = Join-Path $PackageRoot "app"
 $PackagesDir = Join-Path $PackageRoot "packages"
 $ThirdPartyDir = Join-Path $PackageRoot "THIRD-PARTY"
+$DriversDir = Join-Path $PackageRoot "drivers"
 
 foreach ($Path in @($ReleaseDir, $StageDir)) {
     if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Recurse -Force }
 }
-New-Item -ItemType Directory -Force -Path $ReleaseDir, $StageDir, $CacheDir, $PackageRoot, $RuntimeDir, $AppDir, $PackagesDir, $ThirdPartyDir | Out-Null
+New-Item -ItemType Directory -Force -Path $ReleaseDir, $StageDir, $CacheDir, $PackageRoot, $RuntimeDir, $AppDir, $PackagesDir, $ThirdPartyDir, $DriversDir | Out-Null
+
+Copy-Item -LiteralPath "packaging\README-BROWSER-DRIVER.txt" -Destination (Join-Path $DriversDir "README.txt")
 
 $RuntimeFileName = Split-Path ([Uri]$RuntimeManifest.url).AbsolutePath -Leaf
 $RuntimeZip = Join-Path $CacheDir $RuntimeFileName
@@ -146,6 +149,7 @@ Get-ChildItem -LiteralPath $PackageRoot -Recurse -File |
 Copy-Item -LiteralPath "packaging\Start-WardLens.bat" -Destination $PackageRoot
 Copy-Item -LiteralPath "packaging\Diagnose-WardLens.bat" -Destination $PackageRoot
 Copy-Item -LiteralPath "packaging\README-FIRST.txt" -Destination $PackageRoot
+& (Join-Path $PSScriptRoot "build_launcher.ps1") -OutputPath (Join-Path $PackageRoot "WardLens.exe")
 Copy-Item -LiteralPath "README.md", "SECURITY.md", "LICENSE" -Destination $PackageRoot
 Copy-Item -LiteralPath "docs" -Destination (Join-Path $PackageRoot "docs") -Recurse
 Copy-Item -LiteralPath $SpdxFile -Destination (Join-Path $ThirdPartyDir "PYTHON-RUNTIME-SPDX.json")
@@ -179,7 +183,11 @@ $ProvenanceLines = @(
     "runtime_sha256: $($RuntimeManifest.sha256)",
     "runtime_authenticode: Valid (python.exe, pythonw.exe, python314.dll)",
     "third_party_native_binaries_outside_runtime: none",
-    "launcher: visible BAT; no PowerShell, installer, pip, or policy bypass on target"
+    "edge_driver: not redistributed; user may prepare a hash-verified copy from Microsoft for personal testing",
+    "first_party_launcher: WardLens.exe (MSVC x64, static CRT, compiled from packaging/wardlens_launcher.c)",
+    "first_party_launcher_authenticode: not signed; Python runtime signature does not cover the project launcher",
+    "first_party_launcher_sha256: $((Get-FileHash -LiteralPath (Join-Path $PackageRoot 'WardLens.exe') -Algorithm SHA256).Hash.ToLowerInvariant())",
+    "launcher: native EXE plus visible BAT fallback; no PowerShell, installer, pip, or policy bypass on target"
 )
 $ProvenanceLines | Set-Content -LiteralPath (Join-Path $PackageRoot "BUILD_PROVENANCE.txt") -Encoding UTF8
 $ProvenanceLines | Set-Content -LiteralPath (Join-Path $ReleaseDir "BUILD_PROVENANCE.txt") -Encoding UTF8
@@ -188,6 +196,7 @@ Invoke-Checked -FilePath $RuntimePython -ArgumentList @("-I", "-B", "-X", "utf8"
 Invoke-Checked -FilePath $RuntimePython -ArgumentList @("-I", "-B", "-X", "utf8", "-m", "wardlens", "--self-test") -Label "Portable core self-test"
 Invoke-Checked -FilePath $RuntimePython -ArgumentList @("-I", "-B", "-X", "utf8", "-m", "wardlens", "--ui-self-test") -Label "Portable visible UI self-test"
 Invoke-Checked -FilePath $RuntimePython -ArgumentList @("-I", "-B", "-X", "utf8", "-m", "wardlens", "--diagnose") -Label "Portable diagnostic test"
+Invoke-Checked -FilePath "python" -ArgumentList @("scripts\test_windows_launcher.py", "--exe", (Join-Path $PackageRoot "WardLens.exe")) -Label "Native EXE launch tests"
 
 $env:WARDLENS_NO_PAUSE = "1"
 try {

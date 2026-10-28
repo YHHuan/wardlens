@@ -22,8 +22,10 @@
 | Stale/broken session causes mass false-empty | discard entire session after network/auth failure; explicit re-login | SSO behavior must be validated live |
 | Clipboard sync leaks data | only deidentified prompt; warning; conditional auto-clear | cloud clipboard may sync before clear |
 | AI draft copied as fact | source markers, visible warning, no automatic EMR write | clinician can still fail to review |
-| Supply-chain or binary reputation | readable BAT; pinned PSF runtime verified by official SPDX hash and Authenticode publisher; hash-locked pure-Python wheels; source + CI logs + release hashes | hospital policy can still deny BAT, Python, a new hash, or the download origin |
-| Unsafe developer configuration | explicit mode and warning; strict JSON schema; bounded prompts/tokens; fixed OpenRouter origin; preview invalidated after edits | a clinician can still author a clinically unsafe prompt or choose a weak model |
+| Supply-chain or binary reputation | minimal first-party C launcher plus readable BAT; pinned PSF runtime verified by SPDX hash and Authenticode publisher; hash-locked pure-Python wheels; source + CI logs + release hashes | WardLens.exe is not signed; hospital policy can deny it, BAT, Python, a new hash, or the download origin |
+| Unsafe developer configuration | explicit mode and warning; strict JSON schema; bounded prompts and validated optional token caps; fixed OpenRouter origin; preview invalidated after edits | provider output/cost limits apply when the app cap is omitted; a clinician can still author an unsafe prompt or choose a weak model |
+| Browser diagnostic exposes existing sessions | fresh temporary profile; synthetic local page only; loopback service; fixed report fields with no raw exceptions, URLs or paths; cleanup own process tree | host policies can deny automation; this pilot does not validate EMR integration |
+| Driver download substitution or redistribution | explicit official pinned download; ZIP and EXE hashes; retain vendor notices; no driver binary in public releases | versions must match installed Edge; public package cannot bundle the restricted driver |
 
 ## Deliberate non-features
 
@@ -32,7 +34,8 @@
 - no API key in developer export/import files;
 - no arbitrary LLM host override through developer mode;
 - no Defender/SmartScreen bypass instructions;
-- no WardLens-generated PyInstaller executable or target-side PowerShell/pip/download step;
+- no WardLens-generated PyInstaller executable or startup-time PowerShell/pip/download step;
+- no automatic driver download during a probe, stealth automation or protection bypass;
 - no automatic order placement or note submission;
 - no persistent clinical cache;
 - no background all-patient longitudinal crawl;

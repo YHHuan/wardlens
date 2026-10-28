@@ -114,6 +114,7 @@ def run_vgh_adapter_self_test() -> None:
         "findUd": "<a href='?action=orderDetail&caseno=SYNTH001'>Orders</a>",
         "orderDetail": "<table id='udorder'><tr><td>Synthetic order</td></tr></table>",
         "findResd": "<table id='resdtable'><tr><td>115/10/16 Synthetic lab</td></tr></table>",
+        "findTpr": "<table id='tprlist'><tr><th>Date</th><th>BP</th><th>HR</th></tr><tr><td>115/10/16 08:00</td><td>120/80 mmHg</td><td>80 bpm</td></tr></table>",
         "findRes": "<table id='reslist'><tr><td>Synthetic report</td><td>blood</td><td></td><td></td><td>2026/10/16</td></tr></table>",
     }
 
@@ -138,6 +139,7 @@ def run_vgh_adapter_self_test() -> None:
             "admission_note",
             "progress_note",
             "medication",
+            "vital_signs",
             "lab_chemistry",
             "lab_cbc",
             "report_index",

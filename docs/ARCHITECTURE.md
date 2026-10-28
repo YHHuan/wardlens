@@ -18,24 +18,24 @@ exact outbound preview + SHA-256
         └────────► OpenRouter ZDR endpoint ─► selected LLM
 ```
 
-No clinical record cache, raw prompt log, response log, EMR write endpoint, Selenium driver, browser extension, or long-lived local web server exists in the MVP.
+No clinical record cache, raw prompt log, response log, EMR write endpoint, browser extension, or long-lived local web server exists in the clinical workflows. A separate browser diagnostic can use an explicitly prepared Microsoft Edge WebDriver; it never shares EMR sessions or reads clinical data.
 
 Blocked drafts are held in memory in a separate editable local dialog; they are never an approved request. Every repaired draft is canonicalized, rescanned and hashed before becoming the exact read-only preview. Both workflows still require an explicit send confirmation. See [AI and trends](AI_AND_TRENDS.md) for history bounds and coverage semantics.
 
-The only local listener is an ephemeral `127.0.0.1` HTTP callback created during an explicit OpenRouter OAuth PKCE login. It receives a one-time authorization code, never clinical content, and closes immediately after success or timeout. No listener exists during normal EMR or LLM use.
+An ephemeral `127.0.0.1` HTTP callback runs during explicit OpenRouter OAuth PKCE login, receives a one-time authorization code without clinical content, and closes after success/timeout. The independent browser test starts its own loopback WebDriver service and fresh temporary Edge profile, exercises a local synthetic page, then deletes the session and stops only its own process tree. No listener exists during normal EMR or LLM use.
 
 ## Portable runtime boundary
 
 ```text
-Start-WardLens.bat (readable launcher)
+WardLens.exe (native launcher) / Start-WardLens.bat (diagnostic fallback)
         │ isolated mode; fixed relative paths
         ▼
-PSF-signed python.exe + PSF release runtime
+PSF-signed pythonw.exe / python.exe + PSF release runtime
         ├── app/       WardLens .py and resources
         └── packages/  hash-locked pure-Python wheels only
 ```
 
-The release does not contain a WardLens-built EXE. Runtime bytes are pinned to the SHA-256 published in python.org's SPDX document; CI verifies the main Authenticode publisher and rejects native files under `app/` or `packages/`. The target host performs no install or dependency download. Startup and Tk callback failures write only bounded, privacy-safe diagnostics outside clinical export locations.
+The root EXE is a small first-party launcher compiled from C source, with no shell, self-extraction, network, installer or administrator requirement. It is not Authenticode-signed; PSF runtime signatures do not cover it. Runtime bytes are pinned to python.org's SPDX SHA-256; CI verifies the runtime publisher and rejects native files under `app/`, `packages/` and the public `drivers/` directory. Startup requires no install/download. Only the separate, explicit browser-driver preparation button downloads from Microsoft with hash verification; downloaded license notices stay beside that personal copy. Startup and Tk callback failures write only bounded, privacy-safe diagnostics outside clinical export locations.
 
 ## Developer configuration flow
 

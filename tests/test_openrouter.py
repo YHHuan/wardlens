@@ -44,6 +44,18 @@ def test_stream_payload_requests_usage() -> None:
     assert payload["stream_options"] == {"include_usage": True}
 
 
+@pytest.mark.parametrize("stream", [True, False])
+def test_default_profiles_do_not_send_an_application_output_cap(stream):
+    from wardlens.config import DEFAULT_PROFILES
+
+    for profile in DEFAULT_PROFILES.values():
+        payload = OpenRouterClient._payload(PromptEnvelope("system", "user"), profile, require_zdr=True, stream=stream)
+        assert "max_tokens" not in payload
+        assert "max_completion_tokens" not in payload
+    explicit = OpenRouterClient._payload(PromptEnvelope("system", "user"), _profile(), require_zdr=True, stream=stream)
+    assert explicit["max_tokens"] == 1200
+
+
 class _Response:
     ok = True
     status_code = 200

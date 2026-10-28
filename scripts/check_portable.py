@@ -103,6 +103,8 @@ def _check_requirements() -> list[str]:
 def _check_package(path: Path) -> list[str]:
     errors: list[str] = []
     required = (
+        "WardLens.exe",
+        "drivers/README.txt",
         "Start-WardLens.bat",
         "Diagnose-WardLens.bat",
         "README-FIRST.txt",
@@ -121,6 +123,13 @@ def _check_package(path: Path) -> list[str]:
     for relative in required:
         if not (path / relative).is_file():
             errors.append(f"portable package is missing {relative}")
+    for candidate in path.iterdir():
+        if candidate.is_file() and candidate.suffix.lower() in NATIVE_SUFFIXES and candidate.name != "WardLens.exe":
+            errors.append(f"unrecognized root native binary: {candidate.name}")
+    if (path / "drivers").exists():
+        for candidate in (path / "drivers").rglob("*"):
+            if candidate.is_file() and candidate.suffix.lower() in NATIVE_SUFFIXES:
+                errors.append("Public release must not redistribute Microsoft WebDriver; use personal preparation instead")
     for parent in (path / "app", path / "packages"):
         if not parent.exists():
             continue

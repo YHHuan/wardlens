@@ -51,6 +51,12 @@ v0.4 的問題可用合成內容重現：`text/event-stream` 未指定 charset �
 
 日常整理用 `fast` 或 `gemini_fast`；急症第一輪用 `emergency_fast`，同步床邊處置／叫支援。複雜或矛盾問題再用 `deep`、`claude_second`、`claude_deep` 或 `gemini_deep`。
 
-Reasoning 與可見回答可能共用 max tokens；本版提高預設預算，但不保證每題都夠。回應達上限、被過濾、缺少正常結束訊號或串流中斷時會標成不完整，不會顯示生成完成。可縮小問題、減少不相關來源、降低 reasoning 或提高 tokens 重試；不要依不完整片段執行處置。[OpenRouter reasoning tokens](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)
+v0.6.0 起七條路由預設都不傳 `max_tokens`，使用上游供應商預設；這不是無限輸出。開發者模式的 Max tokens 留白或填 0 即採此方式，亦可指定正整數。舊設定中與歷史內建值相同的額度會自動改成未指定；其他手動額度、模型與 prompt 保留。若仍想保留原內建數字，可於升級後重新儲存。[OpenRouter parameters](https://openrouter.ai/docs/api_reference/parameters)
+
+Reasoning 與可見回答可能共用額度。回應達供應商／自訂上限、被過濾、缺少正常結束訊號或串流中斷時會標成不完整；不會自動續寫或重送產生費用。可縮小問題、降低 reasoning，或依模型支援指定較高 tokens 後手動重試。[OpenRouter reasoning tokens](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)
+
+## 生命徵象
+
+有本次住院序號時，另讀取 `findTpr` 的 `tprlist` 表，保留原表日期、時間、欄位與數值，供兩個 AI 工作區帶入。它是本次住院來源的快照，範圍不等於左側檢驗／報告的回溯月份，也不保證整段住院完整。多筆資料不會全部標成第一筆日期。未辨識 T／BP／HR／RR／SpO₂ 欄位、日期或來源失敗會明示；氧氣裝置／流量與最新床邊數值須另核對。內建查房 prompt 已加入此規則，既有自訂 prompt 不會覆蓋。
 
 ZDR 與 `data_collection=deny` 是外部處理的資料政策限制，不是院內運算。送出時去識別內容仍會離開電腦，經 OpenRouter 與上游 provider 處理。[OpenRouter provider routing](https://openrouter.ai/docs/guides/routing/provider-selection)

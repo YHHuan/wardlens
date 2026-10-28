@@ -119,7 +119,7 @@ class ModelProfile:
     label: str
     model: str
     reasoning_effort: str
-    max_tokens: int
+    max_tokens: int | None
     intended_use: str
 
 

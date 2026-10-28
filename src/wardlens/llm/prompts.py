@@ -143,7 +143,7 @@ class PromptBuilder:
             content = bounded_source(record.content, allocations[index])
             if record.source_type.startswith("lab_") or record.source_type in {
                 "report",
-                "report_index",
+                "report_index", "vital_signs",
             }:
                 content = coverage_summary(record, relative_to=anchor) + "\n" + content
             when = "time not established"
@@ -202,7 +202,7 @@ class PromptBuilder:
             lines.extend([
                 "", f"[{source_id}] {record.title}｜{record.source_type}｜{when}｜{record.status or '狀態未建立'}",
             ])
-            if record.source_type.startswith("lab_") or record.source_type in {"report", "report_index"}:
+            if record.source_type.startswith("lab_") or record.source_type in {"report", "report_index", "vital_signs"}:
                 lines.append(coverage_summary(record))
             lines.append(content)
         if not bundle.records:

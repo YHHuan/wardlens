@@ -84,10 +84,19 @@ class PromptBuilder:
         bundle: PatientBundle | None = None,
         question: str = "",
         emergency_text: str = "",
+        context_text: str | None = None,
     ) -> PromptEnvelope:
         system = self.system_prompt(workflow)
         blocks: list[str] = []
-        if bundle is not None:
+        if context_text is not None:
+            # An explicit editable draft REPLACES the automatic bundle, including
+            # when the user cleared it. Never silently append the original chart.
+            blocks.append(
+                '<clinical_source id="EDITED-CONTEXT" status="clinician-edited; verify against EMR">\n'
+                + self._escape_source(context_text.strip() or "No patient context supplied.")
+                + "\n</clinical_source>"
+            )
+        elif bundle is not None:
             blocks.append(self._bundle_text(bundle))
         if workflow == "emergency":
             case_text = emergency_text.strip() or question.strip()
@@ -128,20 +137,7 @@ class PromptBuilder:
                 + "\n</source_warnings>"
             )
         source_blocks: list[str] = []
-        # Fair-share allocation prevents early notes from crowding out all labs
-        # and later reports. Short sources donate their unused share.
-        allocations = [0] * len(bundle.records)
-        remaining = 240000
-        pending = set(range(len(bundle.records)))
-        while pending and remaining:
-            share = max(1, remaining // len(pending))
-            for i in sorted(pending):
-                need = min(len(bundle.records[i].content), 120000) - allocations[i]
-                take = min(need, share, remaining)
-                allocations[i] += take
-                remaining -= take
-                if take == need:
-                    pending.remove(i)
+        allocations = self._source_allocations(bundle)
         anchor = bundle.fetched_at.astimezone(EMR_TIMEZONE).date()
         for index, (source_id, record) in enumerate(bundle.source_map()):
             content = bounded_source(record.content, allocations[index])
@@ -168,6 +164,71 @@ class PromptBuilder:
                 '<clinical_source id="SRC-000">No readable clinical source was provided.</clinical_source>'
             )
         return "\n".join(header + source_blocks)
+
+    @staticmethod
+    def _source_allocations(bundle: PatientBundle) -> list[int]:
+        # Fair-share allocation prevents earlier notes from crowding out labs.
+        allocations = [0] * len(bundle.records)
+        remaining = 240000
+        pending = set(range(len(bundle.records)))
+        while pending and remaining:
+            share = max(1, remaining // len(pending))
+            for i in sorted(pending):
+                need = min(len(bundle.records[i].content), 120000) - allocations[i]
+                take = min(need, share, remaining)
+                allocations[i] += take
+                remaining -= take
+                if take == need:
+                    pending.remove(i)
+        return allocations
+
+    def editor_context(self, bundle: PatientBundle) -> str:
+        """Human-editable chart snapshot without system prompts or XML scaffolding."""
+        lines = [
+            "病人資料草稿（本機可編輯；編輯不會寫回 EMR，引用仍須核對原始來源）",
+            f"資料截止：{bundle.fetched_at.astimezone(EMR_TIMEZONE):%Y-%m-%d %H:%M %Z}",
+            f"Age: {bundle.patient.age or 'not provided'}; Sex: {bundle.patient.sex or 'not provided'}",
+            window_description(bundle),
+        ]
+        if bundle.warnings:
+            lines.extend(["", "擷取警告：", *bundle.warnings])
+        allocations = self._source_allocations(bundle)
+        for index, (source_id, record) in enumerate(bundle.source_map()):
+            content = bounded_source(record.content, allocations[index])
+            when = (
+                record.observed_at.astimezone(EMR_TIMEZONE).strftime("%Y-%m-%d %H:%M")
+                if record.observed_at else "來源時間未建立"
+            )
+            lines.extend([
+                "", f"[{source_id}] {record.title}｜{record.source_type}｜{when}｜{record.status or '狀態未建立'}",
+            ])
+            if record.source_type.startswith("lab_") or record.source_type in {"report", "report_index"}:
+                lines.append(coverage_summary(record))
+            lines.append(content)
+        if not bundle.records:
+            lines.append("未取得可讀資料，不代表沒有異常。")
+        return "\n".join(lines)
+
+    @staticmethod
+    def clinical_preview(envelope: PromptEnvelope) -> str:
+        """Readable projection of the exact user message; full bytes stay available.
+
+        Remove ONLY app-generated wrapper lines before unescaping clinical text,
+        so source text resembling tags cannot be accidentally hidden.
+        """
+        output: list[str] = []
+        for line in envelope.user.split("\n"):
+            if line.startswith('<clinical_source id="EDITED-CONTEXT" '):
+                output.append("【將送出的病人資料】")
+            elif line == "<current_event>":
+                output.append("【目前病況／問題】")
+            elif line == "<clinician_question>":
+                output.append("【問題】")
+            elif line in {"</clinical_source>", "</current_event>", "</clinician_question>"}:
+                continue
+            else:
+                output.append(line)
+        return html.unescape("\n".join(output))
 
     @staticmethod
     def _escape_source(text: str) -> str:

@@ -44,12 +44,14 @@ class AIWorkflowService:
         bundle: PatientBundle | None = None,
         question: str = "",
         emergency_text: str = "",
+        context_text: str | None = None,
     ) -> PreparedRequest:
         raw = self.builder.build(
             workflow,
             bundle=bundle,
             question=question,
             emergency_text=emergency_text,
+            context_text=context_text,
         ).canonical()
         patient: PatientSummary | None = bundle.patient if bundle is not None else None
         return self.prepare_reviewed(

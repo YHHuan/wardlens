@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import requests
 
 from wardlens.llm.prompts import PromptEnvelope
+from wardlens.llm.sse import SSEProtocolError, iter_sse_data
 from wardlens.models import LLMResult, ModelProfile
 
 
@@ -203,25 +204,34 @@ class OpenRouterClient:
         try:
             with response:
                 self._raise_for_response(response)
-                for raw_line in response.iter_lines(decode_unicode=True):
-                    if not raw_line:
+                content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                if content_type and content_type != "text/event-stream":
+                    raise OpenRouterError(
+                        "回應不是預期的串流格式（WL-SSE-TYPE）；請檢查網路／代理伺服器或稍後重試。"
+                    )
+                for data in iter_sse_data(response.iter_content(chunk_size=512, decode_unicode=False)):
+                    data = data.strip()
+                    if not data:
                         continue
-                    line = raw_line.strip()
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
                     if data == "[DONE]":
                         saw_done = True
                         break
                     try:
                         payload = json.loads(data)
                     except json.JSONDecodeError as exc:
-                        raise OpenRouterError("串流資料損毀；內容不完整，請重新生成。") from exc
+                        raise OpenRouterError(
+                            "收到無法解析的串流事件（WL-SSE-JSON）；本次內容不完整。"
+                            "請勿依片段執行處置，可回報此代碼；不需提供病歷。"
+                        ) from exc
+                    if not isinstance(payload, dict):
+                        raise OpenRouterError("串流事件結構不符（WL-SSE-SHAPE）；內容不完整。")
                     if payload.get("error"):
                         raise OpenRouterError("OpenRouter 在串流期間回報錯誤。")
                     request_id = str(payload.get("id", request_id))
                     provider_name = str(payload.get("provider", provider_name))
-                    choices = payload.get("choices") or []
+                    choices = payload.get("choices", [])
+                    if not isinstance(choices, list):
+                        raise OpenRouterError("串流選項結構不符（WL-SSE-SHAPE）；內容不完整。")
                     usage = payload.get("usage")
                     if isinstance(usage, dict):
                         yield StreamEvent(
@@ -229,14 +239,31 @@ class OpenRouterClient:
                         )
                     if not choices:
                         continue
+                    if not isinstance(choices[0], dict):
+                        raise OpenRouterError("串流選項結構不符（WL-SSE-SHAPE）；內容不完整。")
                     if choices[0].get("finish_reason"):
                         finish_reason = choices[0]["finish_reason"]
-                    delta = choices[0].get("delta", {}).get("content", "")
+                        # A later usage event must never erase a truncation error.
+                        self._check_finish_reason(finish_reason)
+                    delta_fields = choices[0].get("delta")
+                    if delta_fields is None:
+                        delta_fields = {}
+                    if not isinstance(delta_fields, dict):
+                        raise OpenRouterError("串流文字結構不符（WL-SSE-SHAPE）；內容不完整。")
+                    delta = delta_fields.get("content", "")
+                    if delta is not None and not isinstance(delta, str):
+                        raise OpenRouterError("串流文字結構不符（WL-SSE-SHAPE）；內容不完整。")
                     if isinstance(delta, str) and delta:
                         emitted = True
                         yield StreamEvent(
                             delta=delta, request_id=request_id, provider_name=provider_name
                         )
+        except UnicodeDecodeError as exc:
+            raise OpenRouterError(
+                "串流不是有效的 UTF-8 文字（WL-SSE-UTF8）；內容不完整，請稍後重試。"
+            ) from exc
+        except SSEProtocolError as exc:
+            raise OpenRouterError("串流分段超過安全限制（WL-SSE-FRAME）；內容不完整。") from exc
         except requests.RequestException as exc:
             raise OpenRouterError("OpenRouter 串流逾時或連線中斷；以上內容不完整。") from exc
         finally:

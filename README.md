@@ -2,7 +2,7 @@
 
 WardLens 是給台灣 PGY／住院醫師使用的 Windows 查房輔助工具。它以唯讀方式整理 VGH EMR 病人清單與選取病人的 admission note、progress note、用藥、檢驗趨勢及報告索引，再由使用者決定是否把「先去識別、再人工預覽」的內容送往 OpenRouter。
 
-> 狀態：`v0.4.0` 是安全導向 portable pilot：新增被擋預覽的本機修正流程、更新模型，並預設查詢近三個月的檢驗／報告。院內資料載入已獲使用者回報成功；新增報告明細與各模型實際生成仍需院內／帳戶驗收。它不是已核准的醫療器材，不會自動寫回 EMR。
+> 狀態：`v0.5.0` 是 portable pilot：修正中文串流誤判損毀，查房／病歷與急症頁改為可編輯的「資料＋問題＋回答」。背景 prompt 預設收合，送出前仍須檢查去識別資料。預設保留近三個月檢驗／報告；模型與自訂設定沿用 v0.4。院內資料載入已獲使用者回報成功；實際帳戶生成仍須驗收。它不是已核准的醫療器材，不會自動寫回 EMR。
 
 ## 目前功能
 
@@ -10,6 +10,8 @@ WardLens 是給台灣 PGY／住院醫師使用的 Windows 查房輔助工具。�
 - 只在使用者選取病人後抓詳細內容，不預抓整批病歷。
 - 本機整理最新 admission note 頂端 TODO、近期報告與來源 hash。
 - 產生查房重點、英文 Admission Note、自由提問與成人住院急症處置草稿。
+- 兩個 AI 頁各有可編輯病人資料框、問題／目前病況框與回答區；資料框刪改後，不會另外附回原始病歷。各頁可帶入已載入資料或重新抓取。
+- 去識別預覽改為按需開啟；背景 prompt 與完整 input 放在進階展開區。直接按「送出 AI」會先引導確認預覽。
 - 保留快速整理／急症第一輪與慢速複核，提供 OpenAI、Claude、Gemini 共七條路由。
 - OpenRouter 瀏覽器一鍵登入（OAuth PKCE），不必手打長 key；亦可從剪貼簿貼上一次。
 - 開發者模式可調整七條路由的模型 ID、reasoning、max tokens 與四套 system prompt，並從 OpenRouter 即時載入最新／ZDR 模型目錄；升級保留自訂模型與 prompt。
@@ -22,14 +24,17 @@ WardLens 是給台灣 PGY／住院醫師使用的 Windows 查房輔助工具。�
 
 ## 快速使用
 
-1. [直接下載 v0.4.0 Portable ZIP](https://github.com/YHHuan/wardlens/releases/download/v0.4.0/WardLens-Portable.zip)，或從 [GitHub Releases](https://github.com/YHHuan/wardlens/releases) 選 `WardLens-Portable.zip`。不是「Code → Download ZIP」或 `WardLens-Source.zip`。
+1. [直接下載 v0.5.0 Portable ZIP](https://github.com/YHHuan/wardlens/releases/download/v0.5.0/WardLens-Portable.zip)，或從 [GitHub Releases](https://github.com/YHHuan/wardlens/releases) 選 `WardLens-Portable.zip`。不是「Code → Download ZIP」或 `WardLens-Source.zip`。
 2. 將 ZIP **完整解壓縮**到本機資料夾；不可在 ZIP 預覽內執行，也不可只複製單一 BAT。
 3. 雙擊 `Start-WardLens.bat`。啟動期間保留命令視窗；第一次先勾選「合成資料 Demo」並登入，確認能載入 18 人清單。
 4. 真實環境取消 Demo，輸入入口網帳密；帳密只留在本次記憶體，不會儲存。
 5. 輸入醫師燈號／病房後載入清單，選一名病人；左側選回溯月份（預設 3），再載入詳細資料。更改範圍後需重新載入。
 6. 若院方允許外部 AI，到「隱私與模型」啟用外部 AI、確認政策，再按「用瀏覽器登入 OpenRouter」；授權後 key 會自動存進 Windows Credential Manager。
 7. 可先按「檢查連線／目前模型」確認 key 與公開目錄（不傳病歷、不生成）；再用合成 Demo 測試實際生成。帳戶須有足夠 credits／key 額度。
-8. 每次先按「建立去識別預覽」。若出現本機修正視窗，檢查橘色疑似識別碼、遮罩後按「重新檢查並建立預覽」。閱讀完整 payload，才送出或複製。
+8. 在 AI 頁左框編輯病人資料，右框填問題／目前病況，下方看回答。背景 prompt 不必操作；需要修改時進開發者模式。
+9. 按「送出 AI」或「檢查送出資料…」，閱讀去識別預覽。疑似識別碼會開啟本機修正視窗，遮罩後重新檢查；背景 prompt／完整 input 可展開核對。確認預覽後，仍會再確認模型與外部傳送。
+
+從舊版升級請關閉舊視窗，將新 ZIP 解壓縮到另一個資料夾，再確認標題顯示 `0.5.0`。API key、自訂模型與 prompt 沿用原本的本機設定；病歷草稿只在記憶體，不會搬到新版或自動存檔。
 
 目標電腦不需要安裝 Python、pip 或套件，也不需要系統管理員權限。若沒有出現視窗，雙擊 `Diagnose-WardLens.bat`；它會保留命令視窗並產生不含病歷、帳密、API key 與絕對使用者路徑的 `WardLens-Diagnostics.txt`。
 

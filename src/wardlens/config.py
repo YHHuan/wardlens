@@ -15,7 +15,7 @@ DEFAULT_PROFILES = {
         label="Fast｜日常整理",
         model="openai/gpt-6.1-sol",
         reasoning_effort="low",
-        max_tokens=4000,
+        max_tokens=None,
         intended_use="病人清單整理、待辦與報告摘要",
     ),
     "deep": ModelProfile(
@@ -23,7 +23,7 @@ DEFAULT_PROFILES = {
         label="Slow｜複雜推理",
         model="openai/gpt-6-astra",
         reasoning_effort="high",
-        max_tokens=12000,
+        max_tokens=None,
         intended_use="複雜臨床問題與第二次複核",
     ),
     "emergency_fast": ModelProfile(
@@ -31,7 +31,7 @@ DEFAULT_PROFILES = {
         label="急症立即版",
         model="openai/gpt-6.1-sol",
         reasoning_effort="low",
-        max_tokens=4000,
+        max_tokens=None,
         intended_use="先產生短版床邊 cognitive aid",
     ),
     "claude_second": ModelProfile(
@@ -39,7 +39,7 @@ DEFAULT_PROFILES = {
         label="Claude 第二意見",
         model="anthropic/claude-sonnet-5.5",
         reasoning_effort="high",
-        max_tokens=8000,
+        max_tokens=None,
         intended_use="選擇性跨模型複核",
     ),
     "gemini_fast": ModelProfile(
@@ -47,7 +47,7 @@ DEFAULT_PROFILES = {
         label="Gemini Flash",
         model="google/gemini-3.8-flash",
         reasoning_effort="low",
-        max_tokens=4000,
+        max_tokens=None,
         intended_use="低延遲替代模型",
     ),
     "claude_deep": ModelProfile(
@@ -55,7 +55,7 @@ DEFAULT_PROFILES = {
         label="Claude Opus 深入複核",
         model="anthropic/claude-opus-5.5",
         reasoning_effort="high",
-        max_tokens=12000,
+        max_tokens=None,
         intended_use="較慢且較高成本的第二輪複核",
     ),
     "gemini_deep": ModelProfile(
@@ -63,7 +63,7 @@ DEFAULT_PROFILES = {
         label="Gemini Argon 深入複核",
         model="google/gemini-4-argon",
         reasoning_effort="high",
-        max_tokens=12000,
+        max_tokens=None,
         intended_use="Gemini 高推理第二輪複核",
     ),
 }
@@ -106,15 +106,17 @@ def validate_reasoning_effort(value: str) -> str:
     return effort
 
 
-def validate_max_tokens(value: object) -> int:
+def validate_max_tokens(value: object) -> int | None:
     if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
         raise DeveloperConfigError("max tokens 必須是整數。")
+    if value is None or value == 0 or (isinstance(value, str) and value.strip().lower() in {"", "0", "auto"}):
+        return None
     try:
         tokens = int(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise DeveloperConfigError("max tokens 必須是整數。") from exc
-    if not 128 <= tokens <= 32000:
-        raise DeveloperConfigError("max tokens 必須介於 128–32000。")
+    if tokens < 1:
+        raise DeveloperConfigError("max tokens 請留白／填 0 使用供應商預設，或指定正整數。")
     return tokens
 
 
@@ -192,6 +194,7 @@ class AppSettings:
     max_patients: int = 200
     lab_lookback_months: int = 3
     history_window_version: int = 1
+    output_budget_version: int = 1
 
     @classmethod
     def load(cls, path: Path | None = None) -> AppSettings:
@@ -217,6 +220,18 @@ class AppSettings:
             values["lab_lookback_months"] = 3
         values["history_window_version"] = 1
         values["custom_profiles"] = _clean_profile_overrides(values.get("custom_profiles"))
+        if not payload.get("output_budget_version"):
+            # Old developer edits could freeze the then-shipped token default
+            # alongside a custom model. Remove only those historical defaults.
+            old_defaults = {
+                "fast": {1400, 4000}, "emergency_fast": {1800, 4000},
+                "gemini_fast": {1800, 4000}, "deep": {6000, 12000},
+                "claude_second": {6000, 8000}, "claude_deep": {12000}, "gemini_deep": {12000},
+            }
+            for key, override in values["custom_profiles"].items():
+                if override["max_tokens"] in old_defaults.get(key, set()):
+                    override["max_tokens"] = None
+        values["output_budget_version"] = 1
         values["custom_prompts"] = _clean_prompt_overrides(values.get("custom_prompts"))
         if not isinstance(values.get("custom_models", {}), dict):
             values["custom_models"] = {}

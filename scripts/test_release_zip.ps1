@@ -4,7 +4,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ResolvedZip = (Resolve-Path -LiteralPath $ZipPath).Path
-$SmokeRoot = Join-Path ([IO.Path]::GetTempPath()) ("WardLens portable smoke " + [Guid]::NewGuid().ToString("N"))
+$SmokeRoot = Join-Path ([IO.Path]::GetTempPath()) ("WardLens portable 測試 " + [Guid]::NewGuid().ToString("N"))
 $PreviousNoPause = [Environment]::GetEnvironmentVariable("WARDLENS_NO_PAUSE", "Process")
 
 try {
@@ -16,6 +16,8 @@ try {
     if (-not (Test-Path -LiteralPath $Launcher) -or -not (Test-Path -LiteralPath $DiagnosticLauncher)) {
         throw "The extracted ZIP does not contain the expected WardLens launchers."
     }
+    & python (Join-Path $PSScriptRoot "test_windows_launcher.py") --exe (Join-Path $PackageRoot "WardLens.exe")
+    if ($LASTEXITCODE -ne 0) { throw "Extracted native EXE launch tests failed." }
 
     $env:WARDLENS_NO_PAUSE = "1"
     foreach ($Test in @(

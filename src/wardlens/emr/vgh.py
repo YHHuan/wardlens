@@ -301,7 +301,7 @@ class VGHReadOnlyAdapter:
         self._enter_patient_context(patient, budget)
         case_no = patient.case_no or self._resolve_case_no(patient, budget)
         lookback = str(months)
-        specs = (
+        specs = [
             ("profile", "基本資料", self._url("findPba", histno=patient.histno), None, None),
             (
                 "admission_note",
@@ -332,7 +332,15 @@ class VGHReadOnlyAdapter:
                 None,
                 "resdtable",
             ),
-        )
+        ]
+        if case_no:
+            # Documented in max870121/VGH_web get_TPR; current encounter only.
+            specs.insert(4, (
+                "vital_signs", "生命徵象（本次住院 TPR）",
+                self._url("findTpr", caseno=case_no), None, "tprlist",
+            ))
+        else:
+            bundle.warnings.append("未取得住院序號，未載入生命徵象 TPR；不能以病歷內舊數值代替目前生命徵象。")
         failed_types: set[str] = set()
         for source_type, title, url, preferred_link_title, expected_id in specs:
             try:
@@ -347,6 +355,8 @@ class VGHReadOnlyAdapter:
                 )
                 if record:
                     bundle.add_record(record)
+                    if source_type == "vital_signs":
+                        bundle.warnings.extend(self._vital_warnings(record.content))
                     if TRUNCATION_MARKER in record.content:
                         bundle.warnings.append(
                             f"{title}：超過來源容量，已標記截短；不可視為完整趨勢。"
@@ -379,7 +389,26 @@ class VGHReadOnlyAdapter:
             bundle.warnings.append("兩個累積檢驗頁都未通過內容檢查；不可解讀為檢驗正常或沒有資料。")
         if "report_index" in failed_types:
             bundle.warnings.append("報告索引未通過內容檢查；不可解讀為沒有 pending／新報告。")
+        if "vital_signs" in failed_types:
+            bundle.warnings.append("生命徵象 TPR 未載入；須由床邊／護理系統補充，目前數值未知。")
         return bundle
+
+    @staticmethod
+    def _vital_warnings(content: str) -> list[str]:
+        labels = {
+            "T": r"\b(?:T|temperature)\b|體溫",
+            "BP": r"\b(?:BP|SBP|DBP|blood pressure)\b|血壓",
+            "HR": r"\b(?:HR|P|pulse|heart rate)\b|脈搏|心跳|心率",
+            "RR": r"\b(?:RR|R|respiratory rate)\b|呼吸",
+            "SpO₂": r"\bSpO[2₂]\b|血氧|oxygen saturation",
+        }
+        missing = [name for name, pattern in labels.items() if not re.search(pattern, content, re.I)]
+        warnings = ["TPR 是本次住院來源的擷取快照，不保證整段住院完整；各筆以表中量測時間為準，不代表即時生命徵象。氧氣裝置／流量與缺漏欄位須核對床邊。"]
+        if missing:
+            warnings.append("TPR 未辨識到以下欄位標籤（不代表正常）：" + "、".join(missing))
+        if not VGHReadOnlyAdapter._first_date(content):
+            warnings.append("TPR 未辨識到日期；無法確立量測新舊，請核對原表時間。")
+        return warnings
 
     def _fetch_report_history(self, bundle: PatientBundle, budget: _RequestBudget) -> None:
         """Known yearly index route; follow only returned same-origin report links."""
@@ -578,7 +607,7 @@ class VGHReadOnlyAdapter:
         # Profile dates commonly describe birth, not when this source was recorded.
         observed_at = (
             None
-            if source_type in {"profile", "lab_chemistry", "lab_cbc", "report_index"}
+            if source_type in {"profile", "lab_chemistry", "lab_cbc", "report_index", "vital_signs"}
             else self._first_date(content)
         )
         record_id = sha256(final_page.url.encode("utf-8")).hexdigest()[:20]

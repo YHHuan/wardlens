@@ -9,6 +9,42 @@ from wardlens.llm.prompts import PromptBuilder
 from wardlens.security.audit import AuditEvent, HashOnlyAuditLog
 
 
+@pytest.mark.parametrize("value", [None, "", "  ", "auto", "0", 0])
+def test_provider_default_output_budget_round_trip(value, tmp_path):
+    settings = AppSettings()
+    settings.set_profile_override("deep", model="openai/custom-model", reasoning_effort="high", max_tokens=value)
+    path = settings.save(tmp_path / "settings.json")
+    loaded = AppSettings.load(path)
+    assert loaded.profile("deep").max_tokens is None
+    assert loaded.profile("deep").model == "openai/custom-model"
+    imported = AppSettings()
+    imported.apply_developer_payload(loaded.developer_payload())
+    assert imported.profile("deep").max_tokens is None
+
+
+def test_old_shipped_caps_migrate_without_resetting_custom_configuration(tmp_path):
+    payload = {"custom_profiles": {
+        "fast": {"model": "openai/custom-fast", "reasoning_effort": "medium", "max_tokens": 4000},
+        "deep": {"model": "openai/custom-deep", "reasoning_effort": "high", "max_tokens": 24000},
+    }}
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps(payload))
+    migrated = AppSettings.load(path)
+    assert migrated.profile("fast").max_tokens is None
+    assert migrated.profile("fast").model == "openai/custom-fast"
+    assert migrated.profile("fast").reasoning_effort == "medium"
+    assert migrated.profile("deep").max_tokens == 24000
+    migrated.set_profile_override("fast", model="openai/custom-fast", reasoning_effort="medium", max_tokens=4000)
+    migrated.save(path)
+    assert AppSettings.load(path).profile("fast").max_tokens == 4000
+
+
+def test_custom_budget_above_former_32000_limit_is_supported():
+    settings = AppSettings()
+    settings.set_profile_override("deep", model="openai/custom", reasoning_effort="high", max_tokens=65536)
+    assert settings.profile("deep").max_tokens == 65536
+
+
 def test_settings_round_trip(tmp_path) -> None:
     path = tmp_path / "settings.json"
     settings = AppSettings(demo_mode=False, max_patients=42)

@@ -26,6 +26,16 @@ def _dispatch(arguments: list[str]) -> None:
 
         run_diagnostics()
         return
+    if "--browser-diagnostics" in arguments:
+        from wardlens.browser_probe import report_text, run_browser_probe
+        from wardlens.config import app_data_dir
+
+        text = report_text(run_browser_probe())
+        target = app_data_dir() / "WardLens-Browser-Diagnostics.txt"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+        print(text)
+        return
     try:
         from wardlens.app import main as app_main
     except ModuleNotFoundError as exc:
@@ -46,7 +56,7 @@ def main(argv: list[str] | None = None) -> None:
     except Exception as exc:
         from wardlens.startup import report_unhandled_exception
 
-        noninteractive = {"--self-test", "--ui-self-test", "--diagnose", "--version"}
+        noninteractive = {"--self-test", "--ui-self-test", "--diagnose", "--version", "--browser-diagnostics"}
         report_unhandled_exception(
             type(exc),
             exc,

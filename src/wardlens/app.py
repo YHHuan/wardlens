@@ -239,14 +239,74 @@ class WardLensApp:
         ai_tab = ttk.Frame(notebook, padding=8)
         emergency = ttk.Frame(notebook, padding=8)
         privacy = ttk.Frame(notebook, padding=8)
+        browser_test = ttk.Frame(notebook, padding=8)
         notebook.add(overview, text="病人總覽")
         notebook.add(ai_tab, text="查房／病歷 AI")
         notebook.add(emergency, text="急症處置")
         notebook.add(privacy, text="隱私與模型")
+        notebook.add(browser_test, text="瀏覽器測試")
         self._build_overview_tab(overview)
         self._build_ai_tab(ai_tab)
         self._build_emergency_tab(emergency)
         self._build_privacy_tab(privacy)
+        self._build_browser_test_tab(browser_test)
+
+    def _build_browser_test_tab(self, parent: ttk.Frame) -> None:
+        ttk.Label(parent, text="Selenium 前置相容性測試｜Edge / WebDriver", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(parent, wraplength=850, text=(
+            "先檢查瀏覽器與驅動版本，再用新的暫時設定檔開啟本機合成頁，測試中文、18 列表格與動態更新。"
+            "執行測試不登入醫院、不讀病歷或既有 cookies，也不替換目前擷取方式。\n"
+            "首次可在自己的連網電腦按『從 Microsoft 準備驅動』下載一次，再將整個資料夾帶到院內；不需安裝。"
+            "Microsoft 的驅動授權限制重新散布，因此公開下載包未內附驅動。\n"
+            "版本不合或院內政策阻擋時，請儲存紀錄回傳。PASS 只代表這些相容性測試通過，尚未驗證院內登入與擷取。"
+        )).pack(fill=tk.X, pady=10)
+        actions = ttk.Frame(parent)
+        actions.pack(fill=tk.X)
+        ttk.Button(actions, text="執行本機瀏覽器測試", command=self._run_browser_test).pack(side=tk.LEFT)
+        ttk.Button(actions, text="從 Microsoft 準備驅動（需外網）", command=self._prepare_browser_driver).pack(side=tk.LEFT, padx=8)
+        ttk.Button(actions, text="儲存診斷紀錄…", command=self._save_browser_report).pack(side=tk.LEFT, padx=8)
+        self._browser_report_text = ""
+        self.browser_result_text = ScrolledText(parent, wrap=tk.WORD, height=20)
+        self.browser_result_text.pack(fill=tk.BOTH, expand=True, pady=10)
+        self.browser_result_text.configure(state=tk.DISABLED)
+
+    def _prepare_browser_driver(self) -> None:
+        from wardlens.browser_probe import prepare_driver
+
+        def task() -> str:
+            try:
+                return prepare_driver()
+            except Exception as exc:
+                raise ValueError("驅動準備失敗；請確認可連 Microsoft 官網、資料夾可寫入，或先回傳版本檢查紀錄。") from exc
+
+        def success(version: str) -> None:
+            self.status_var.set(f"已準備 Microsoft WebDriver {version}；可執行瀏覽器測試")
+
+        self._run_async("正在從 Microsoft 下載並核對測試用驅動…", task, success)
+
+    def _run_browser_test(self) -> None:
+        from wardlens.browser_probe import report_text, run_browser_probe
+
+        def success(report: dict) -> None:
+            self._browser_report_text = report_text(report)
+            self._replace_text(self.browser_result_text, self._browser_report_text)
+            self.status_var.set(f"瀏覽器測試：{report['result']}；可儲存診斷紀錄")
+
+        self._run_async("正在測試本機 Edge／WebDriver；可能開啟合成測試頁…", run_browser_probe, success)
+
+    def _save_browser_report(self) -> None:
+        if not self._browser_report_text:
+            messagebox.showinfo("尚無紀錄", "請先執行瀏覽器測試。")
+            return
+        path = filedialog.asksaveasfilename(
+            title="儲存瀏覽器診斷紀錄", defaultextension=".txt",
+            initialfile="WardLens-Browser-Diagnostics.txt", filetypes=[("Text", "*.txt")],
+        )
+        if path:
+            try:
+                Path(path).write_text(self._browser_report_text, encoding="utf-8")
+            except OSError:
+                messagebox.showerror("儲存失敗", "無法寫入此位置，請另選資料夾。")
 
     def _build_overview_tab(self, parent: ttk.Frame) -> None:
         ttk.Label(parent, textvariable=self.selected_var, style="Title.TLabel").pack(anchor="w")
@@ -1090,7 +1150,7 @@ class WardLensApp:
             marker = " *custom" if key in self.settings.custom_profiles else ""
             rows.append(
                 f"{key:16}  {profile.model:31}  reasoning={profile.reasoning_effort:6}  "
-                f"tokens={profile.max_tokens:5}{marker}  {default.intended_use}"
+                f"tokens={profile.max_tokens if profile.max_tokens is not None else '供應商預設'}{marker}  {default.intended_use}"
             )
         self._replace_text(self.model_box, "\n".join(rows))
 

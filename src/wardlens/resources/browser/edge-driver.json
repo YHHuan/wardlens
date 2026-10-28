@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "version": "156.0.4314.50",
+  "url": "https://msedgedriver.microsoft.com/156.0.4314.50/edgedriver_win64.zip",
+  "zip_sha256": "dfb627983fcdaa076266619e5cfda0c654093ce1b320165574c4a08d5fdca357",
+  "exe_sha256": "dd728c934e491abe7e8a07fa366aad135ea15d934cbba99192ad872da59c39d3",
+  "architecture": "x64"
+}

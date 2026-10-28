@@ -37,7 +37,7 @@ jobs:
           $Notes = @"
           $Provenance
 
-          Download WardLens-Portable.zip, extract the entire archive, then run Start-WardLens.bat. This is a clinical pilot build and is not validated for autonomous decisions or EMR write-back.
+          Download WardLens-Portable.zip, extract the entire archive, then double-click WardLens.exe. Keep runtime/app/packages beside the EXE; Start-WardLens.bat remains available for diagnostics. This is a clinical pilot build and is not validated for autonomous decisions or EMR write-back.
           "@
           $ReleaseArgs = @("release", "create", "${{ github.ref_name }}") + $Assets + @("--verify-tag", "--generate-notes", "--title", "WardLens ${{ github.ref_name }} portable pilot", "--notes", $Notes, "--prerelease")
           & gh @ReleaseArgs

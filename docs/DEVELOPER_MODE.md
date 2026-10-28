@@ -15,7 +15,7 @@ Each fixed workflow slot accepts:
 
 - an OpenRouter model ID in `provider/model` form;
 - reasoning effort: `none`, `low`, `medium`, `high`, `xhigh`, or `max`;
-- a maximum output budget from 128 to 32,000 tokens.
+- an optional maximum output budget: blank or `0` omits `max_tokens`; a positive integer sets an explicit cap (subject to provider/model limits).
 
 Use **刷新目前 ZDR 模型目錄** to populate the pickers with live models that currently advertise a ZDR endpoint. **刷新全部模型目錄** is useful for discovery, but selecting one does not bypass the send-time ZDR check: if ZDR is enabled and the chosen model lacks a qualifying endpoint, WardLens fails closed.
 
@@ -23,7 +23,7 @@ The seven current defaults are listed in the README (catalog verified 2026-10-16
 
 Saving checks syntax; send-time public metadata checks validate existence, declared reasoning support and effort compatibility, then ZDR availability. Mandatory-reasoning models cannot use `none`. Refreshing the catalog does not silently change the selected model. The request uses `data_collection=deny`, `require_parameters=true`, and no provider fallbacks. Model weights, latency and clinical quality are not validated by the catalog check.
 
-The token limit includes reasoning on many providers, not just visible output. A `length` finish or missing normal completion is reported as incomplete, not success. See [AI and trends](AI_AND_TRENDS.md).
+v0.6.0 defaults omit the cap and use the provider default. Migration removes former shipped caps from old saved settings without resetting custom models/prompts; other manual caps remain. Re-saving a numeric cap after migration preserves that choice. The provider's limit can include reasoning, not just visible output. A `length` finish or missing normal completion is reported as incomplete, not success. See [AI and trends](AI_AND_TRENDS.md).
 
 ## Prompts
 
@@ -46,7 +46,7 @@ The exported `wardlens-developer-config.json` contains only:
 - model, reasoning and token overrides;
 - complete custom prompts.
 
-It does not contain the OpenRouter key, EMR credentials, clinical cache, audit records, or privacy acknowledgements. Nevertheless, review the custom prompts before sharing because anything manually typed into them will be exported. Import rejects unknown fields, malformed model IDs, unsupported reasoning values, out-of-range token budgets, reserved prompt-envelope markers, oversized prompts and files larger than 1 MB.
+It does not contain the OpenRouter key, EMR credentials, clinical cache, audit records, or privacy acknowledgements. Nevertheless, review the custom prompts before sharing because anything manually typed into them will be exported. Import rejects unknown fields, malformed model IDs, unsupported reasoning values, negative/noninteger token budgets, reserved prompt-envelope markers, oversized prompts and files larger than 1 MB.
 
 ## Intentional boundary
 

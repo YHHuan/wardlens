@@ -21,7 +21,7 @@ from wardlens.llm.oauth import OpenRouterOAuth
 from wardlens.llm.openrouter import OpenRouterError
 from wardlens.llm.prompts import PromptBuilder
 from wardlens.models import PatientBundle, PatientListResult, PatientSummary
-from wardlens.preview import PreviewReviewDialog
+from wardlens.preview import PreviewConfirmationDialog, PreviewReviewDialog
 from wardlens.security.audit import HashOnlyAuditLog
 from wardlens.security.deidentify import DataLeakRisk
 from wardlens.security.outbound import PreviewBlocked
@@ -30,6 +30,7 @@ from wardlens.services.ai import AIWorkflowService, PreparedRequest
 from wardlens.services.export import export_patient_list_csv, export_patient_list_docx
 from wardlens.services.summary import render_bundle_overview
 from wardlens.startup import install_tk_exception_handler, operation_error_detail
+from wardlens.workspace import ClinicalWorkspace
 
 WORKFLOW_LABELS = {
     "查房重點": "rounding",
@@ -57,6 +58,7 @@ class WardLensApp:
         self.bundles: dict[str, PatientBundle] = {}
         self.current_patient: PatientSummary | None = None
         self.current_bundle: PatientBundle | None = None
+        self._current_tree_item = ""
         self.ai_prepared: PreparedRequest | None = None
         self.emergency_prepared: PreparedRequest | None = None
         self._session_api_key = ""
@@ -85,12 +87,11 @@ class WardLensApp:
 
         self.workflow_var = tk.StringVar(value="查房重點")
         self.profile_var = tk.StringVar(value="fast")
-        self.ai_preview_status_var = tk.StringVar(value="尚未建立 outbound 預覽")
+        self.ai_preview_status_var = tk.StringVar(value="按「送出 AI」會先引導檢查去識別資料。")
         self.ai_result_status_var = tk.StringVar(value="")
 
         self.emergency_profile_var = tk.StringVar(value="emergency_fast")
-        self.emergency_with_patient_var = tk.BooleanVar(value=True)
-        self.emergency_preview_status_var = tk.StringVar(value="尚未建立 outbound 預覽")
+        self.emergency_preview_status_var = tk.StringVar(value="按「送出 AI」會先引導檢查去識別資料。")
         self.emergency_mode_warning_var = tk.StringVar(value="急症第一輪建議 emergency_fast。")
 
         self.external_ai_var = tk.BooleanVar(value=self.settings.external_ai_enabled)
@@ -286,45 +287,16 @@ class WardLensApp:
             style="Muted.TLabel",
         ).pack(side=tk.LEFT)
 
-        ttk.Label(parent, text="想問什麼（查房整理可留空）").pack(anchor="w", pady=(8, 2))
-        self.question_text = ScrolledText(parent, height=4, wrap=tk.WORD)
-        self.question_text.pack(fill=tk.X)
-        self.question_text.bind(
-            "<<Modified>>", lambda _event: self._input_modified(self.question_text, emergency=False)
+        self.ai_workspace = ClinicalWorkspace(
+            parent, emergency=False, preview_status=self.ai_preview_status_var,
+            on_change=self._invalidate_ai_preview,
+            on_load=lambda: self._bring_in_context(self.ai_workspace),
+            on_refresh=self._load_selected_patient, on_preview=self._prepare_ai,
+            on_send=self._send_ai, on_copy=self._copy_ai_prompt, on_stop=self._cancel_generation,
         )
-
-        action = ttk.Frame(parent)
-        action.pack(fill=tk.X, pady=6)
-        ttk.Button(action, text="1. 建立去識別預覽", command=self._prepare_ai).pack(side=tk.LEFT)
-        ttk.Button(action, text="2. 送出 OpenRouter", command=self._send_ai).pack(
-            side=tk.LEFT, padx=5
-        )
-        ttk.Button(action, text="複製 input 給其他 AI", command=self._copy_ai_prompt).pack(
-            side=tk.LEFT
-        )
-        ttk.Button(action, text="停止生成", command=self._cancel_generation).pack(side=tk.RIGHT)
-        ttk.Label(parent, textvariable=self.ai_preview_status_var, style="Muted.TLabel").pack(
-            anchor="w"
-        )
-
-        panes = ttk.Panedwindow(parent, orient=tk.VERTICAL)
-        panes.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
-        preview_frame = ttk.LabelFrame(
-            panes, text="實際 outbound input（唯讀；送出 hash 必須完全相同）", padding=4
-        )
-        result_frame = ttk.LabelFrame(panes, text="AI 草稿（使用前逐項核對來源）", padding=4)
-        panes.add(preview_frame, weight=2)
-        panes.add(result_frame, weight=3)
-        self.ai_preview_text = ScrolledText(
-            preview_frame, wrap=tk.WORD, height=8, font=("Consolas", 9)
-        )
-        self.ai_preview_text.pack(fill=tk.BOTH, expand=True)
-        self.ai_preview_text.configure(state=tk.DISABLED)
-        self.ai_result_text = ScrolledText(result_frame, wrap=tk.WORD, height=12)
-        self.ai_result_text.pack(fill=tk.BOTH, expand=True)
-        ttk.Label(result_frame, textvariable=self.ai_result_status_var, style="Muted.TLabel").pack(
-            anchor="w"
-        )
+        self.ai_workspace.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+        self.question_text = self.ai_workspace.question_text
+        self.ai_result_text = self.ai_workspace.result_text
 
     def _build_emergency_tab(self, parent: ttk.Frame) -> None:
         ttk.Label(
@@ -333,26 +305,9 @@ class WardLensApp:
             style="Danger.TLabel",
             wraplength=980,
         ).pack(fill=tk.X)
-        ttk.Label(
-            parent,
-            text="可在文字框按 Win+H 使用 Windows 語音輸入；資訊不完整也可先送出。",
-            style="Muted.TLabel",
-        ).pack(anchor="w", pady=(3, 7))
-        self.emergency_text = ScrolledText(parent, height=7, wrap=tk.WORD)
-        self.emergency_text.pack(fill=tk.X)
-        self.emergency_text.bind(
-            "<<Modified>>", lambda _event: self._input_modified(self.emergency_text, emergency=True)
-        )
-
         controls = ttk.Frame(parent)
         controls.pack(fill=tk.X, pady=6)
-        ttk.Checkbutton(
-            controls,
-            text="附上目前選取病人的已載入資料",
-            variable=self.emergency_with_patient_var,
-            command=self._invalidate_emergency_preview,
-        ).pack(side=tk.LEFT)
-        ttk.Label(controls, text="模式").pack(side=tk.LEFT, padx=(14, 3))
+        ttk.Label(controls, text="模式").pack(side=tk.LEFT, padx=(0, 3))
         combo = ttk.Combobox(
             controls,
             textvariable=self.emergency_profile_var,
@@ -369,38 +324,22 @@ class WardLensApp:
         )
         combo.pack(side=tk.LEFT)
         combo.bind("<<ComboboxSelected>>", lambda _event: self._emergency_profile_changed())
-        ttk.Button(controls, text="1. 預覽", command=self._prepare_emergency).pack(
-            side=tk.LEFT, padx=(12, 4)
-        )
-        ttk.Button(controls, text="2. 送出", command=self._send_emergency).pack(
-            side=tk.LEFT, padx=4
-        )
-        ttk.Button(controls, text="複製 input", command=self._copy_emergency_prompt).pack(
-            side=tk.LEFT, padx=4
-        )
-        ttk.Button(controls, text="停止", command=self._cancel_generation).pack(side=tk.RIGHT)
-        ttk.Label(
-            parent, textvariable=self.emergency_preview_status_var, style="Muted.TLabel"
-        ).pack(anchor="w")
         ttk.Label(
             parent,
             textvariable=self.emergency_mode_warning_var,
             style="Danger.TLabel",
         ).pack(anchor="w")
 
-        panes = ttk.Panedwindow(parent, orient=tk.VERTICAL)
-        panes.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
-        preview_frame = ttk.LabelFrame(panes, text="實際 outbound input", padding=4)
-        result_frame = ttk.LabelFrame(panes, text="床邊 cognitive aid 草稿", padding=4)
-        panes.add(preview_frame, weight=2)
-        panes.add(result_frame, weight=3)
-        self.emergency_preview_text = ScrolledText(
-            preview_frame, wrap=tk.WORD, height=7, font=("Consolas", 9)
+        self.emergency_workspace = ClinicalWorkspace(
+            parent, emergency=True, preview_status=self.emergency_preview_status_var,
+            on_change=self._invalidate_emergency_preview,
+            on_load=lambda: self._bring_in_context(self.emergency_workspace),
+            on_refresh=self._load_selected_patient, on_preview=self._prepare_emergency,
+            on_send=self._send_emergency, on_copy=self._copy_emergency_prompt, on_stop=self._cancel_generation,
         )
-        self.emergency_preview_text.pack(fill=tk.BOTH, expand=True)
-        self.emergency_preview_text.configure(state=tk.DISABLED)
-        self.emergency_result_text = ScrolledText(result_frame, wrap=tk.WORD, height=12)
-        self.emergency_result_text.pack(fill=tk.BOTH, expand=True)
+        self.emergency_workspace.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+        self.emergency_text = self.emergency_workspace.question_text
+        self.emergency_result_text = self.emergency_workspace.result_text
 
     def _build_privacy_tab(self, parent: ttk.Frame) -> None:
         ttk.Label(parent, text="雲端 AI 預設關閉", style="Title.TLabel").pack(anchor="w")
@@ -544,6 +483,7 @@ class WardLensApp:
         self.bundles.clear()
         self.current_patient = None
         self.current_bundle = None
+        self._current_tree_item = ""
         self.ai_prepared = None
         self.emergency_prepared = None
         for item in self.patient_tree.get_children():
@@ -551,10 +491,10 @@ class WardLensApp:
         self.list_status_var.set("尚未載入病人清單")
         self.selected_var.set("尚未選取病人")
         self._replace_text(self.overview_text, "病人資料已清除。")
-        self._replace_text(self.ai_preview_text, "")
-        self._replace_text(self.ai_result_text, "")
-        self._replace_text(self.emergency_preview_text, "")
-        self._replace_text(self.emergency_result_text, "")
+        self.ai_workspace.clear()
+        self.emergency_workspace.clear()
+        self.ai_preview_status_var.set("尚未確認送出資料")
+        self.emergency_preview_status_var.set("尚未確認送出資料")
 
     def _search_patients(self) -> None:
         if not self.adapter.logged_in:
@@ -607,6 +547,20 @@ class WardLensApp:
         patient = self.patients.get(selection[0])
         if patient is None:
             return
+        if patient == self.current_patient:
+            return
+        if self._busy:
+            self._restore_patient_selection()
+            messagebox.showwarning("工作進行中", "請等目前工作完成／停止後再切換病人，避免資料混用。")
+            return
+        if any(w.dirty or w.question_text.get("1.0", "end-1c").strip()
+               for w in (self.ai_workspace, self.emergency_workspace)):
+            if not messagebox.askyesno("切換病人", "切換會清除兩頁的資料草稿、問題與回答，避免帶入上一位病人。繼續？"):
+                self._restore_patient_selection()
+                return
+        self._current_tree_item = selection[0]
+        self.ai_workspace.clear()
+        self.emergency_workspace.clear()
         self.current_patient = patient
         self.current_bundle = self.bundles.get(patient.local_key)
         self.selected_var.set(
@@ -614,10 +568,32 @@ class WardLensApp:
         )
         if self.current_bundle is not None:
             self._replace_text(self.overview_text, render_bundle_overview(self.current_bundle))
+            self._fill_workspaces(self.current_bundle)
         else:
             self._replace_text(self.overview_text, "尚未載入此病人的詳細資料；空白不代表沒有異常。")
         self._invalidate_ai_preview()
         self._invalidate_emergency_preview()
+
+    def _restore_patient_selection(self) -> None:
+        if self._current_tree_item and self.patient_tree.exists(self._current_tree_item):
+            self.patient_tree.selection_set(self._current_tree_item)
+        else:
+            self.patient_tree.selection_remove(self.patient_tree.selection())
+
+    def _fill_workspaces(self, bundle: PatientBundle) -> None:
+        self.ai_workspace.load_bundle(bundle)
+        self.emergency_workspace.load_bundle(bundle)
+
+    def _bring_in_context(self, workspace: ClinicalWorkspace) -> None:
+        if self._busy:
+            messagebox.showwarning("工作進行中", "請等待目前工作完成。")
+            return
+        if self.current_bundle is None:
+            self._load_selected_patient()
+            return
+        if workspace.dirty and not messagebox.askyesno("取代資料草稿", "這會取代此頁已編輯的資料框；問題保留。繼續？"):
+            return
+        workspace.load_bundle(self.current_bundle)
 
     def _load_selected_patient(self) -> None:
         if self._busy:
@@ -626,6 +602,9 @@ class WardLensApp:
         if self.current_patient is None:
             messagebox.showerror("未選取病人", "請先從左側清單選取病人。")
             return
+        if any(w.dirty for w in (self.ai_workspace, self.emergency_workspace)):
+            if not messagebox.askyesno("重新抓取資料", "成功載入後會取代兩頁已編輯的資料框；問題保留。繼續？"):
+                return
         patient = self.current_patient
         self.settings.lab_lookback_months = int(self.lookback_var.get())
         self.settings.save()
@@ -639,6 +618,7 @@ class WardLensApp:
                 self.status_var.set("已載入先前選取病人；請重新選取以查看。")
                 return
             self.current_bundle = bundle
+            self._fill_workspaces(bundle)
             self._replace_text(self.overview_text, render_bundle_overview(bundle))
             self.status_var.set(
                 f"已載入選取病人：{len(bundle.records)} 個來源／{len(bundle.warnings)} 個警告"
@@ -680,43 +660,37 @@ class WardLensApp:
         messagebox.showinfo("匯出完成", f"已儲存：{path}")
 
     def _prepare_ai(self) -> None:
-        if self.current_bundle is None:
-            messagebox.showerror("病人資料未載入", "請先載入選取病人的詳細資料。")
+        if not self.ai_workspace.context() and not self.question_text.get("1.0", "end-1c").strip():
+            messagebox.showerror("缺少資料", "請先在資料框貼上／帶入病人資料，或輸入問題。")
             return
         workflow = WORKFLOW_LABELS[self.workflow_var.get()]
         question = self.question_text.get("1.0", tk.END).strip()
         self._invalidate_ai_preview()
         self.ai_prepared = self._prepare_with_review(
             workflow,
-            bundle=self.current_bundle,
+            bundle=self.ai_workspace.bundle,
             question=question,
+            context_text=self.ai_workspace.context(),
         )
         if self.ai_prepared is None:
             return
-        self._replace_text(self.ai_preview_text, self.ai_prepared.preview.text)
         self.ai_preview_status_var.set(
-            f"已移除 {self.ai_prepared.preview.replacement_count} 個識別項；payload SHA-256 "
-            f"{self.ai_prepared.preview.sha256[:16]}…"
+            f"預覽已確認（已移除 {self.ai_prepared.preview.replacement_count} 個識別項）；可送出或複製。"
         )
 
     def _prepare_emergency(self) -> None:
         event_text = self.emergency_text.get("1.0", tk.END).strip()
-        bundle = self.current_bundle if self.emergency_with_patient_var.get() else None
-        if self.emergency_with_patient_var.get() and bundle is None:
-            messagebox.showerror("病人資料未載入", "請先載入選取病人，或取消勾選附上病人資料。")
-            return
         self._invalidate_emergency_preview()
         self.emergency_prepared = self._prepare_with_review(
             "emergency",
-            bundle=bundle,
+            bundle=self.emergency_workspace.bundle,
             emergency_text=event_text,
+            context_text=self.emergency_workspace.context(),
         )
         if self.emergency_prepared is None:
             return
-        self._replace_text(self.emergency_preview_text, self.emergency_prepared.preview.text)
         self.emergency_preview_status_var.set(
-            f"已移除 {self.emergency_prepared.preview.replacement_count} 個識別項；payload SHA-256 "
-            f"{self.emergency_prepared.preview.sha256[:16]}…"
+            f"預覽已確認（已移除 {self.emergency_prepared.preview.replacement_count} 個識別項）；可送出或複製。"
         )
 
     def _prepare_with_review(
@@ -749,8 +723,13 @@ class WardLensApp:
                 )
                 self.root.wait_window(dialog.window)
                 prepared = dialog.result
+            if prepared is not None:
+                confirmation = PreviewConfirmationDialog(self.root, prepared=prepared)
+                self.root.wait_window(confirmation.window)
+                if not confirmation.approved:
+                    prepared = None
             self.status_var.set(
-                "本機預覽已建立；請閱讀後再按送出" if prepared else "尚未通過預覽；未送出任何資料"
+                "本機預覽已確認；尚未送出資料" if prepared else "尚未確認預覽；未送出任何資料"
             )
             return prepared
         except Exception as exc:
@@ -759,19 +738,17 @@ class WardLensApp:
         finally:
             self._busy = False
 
-    def _input_modified(self, widget: ScrolledText, *, emergency: bool) -> None:
-        if not widget.edit_modified():
-            return
-        widget.edit_modified(False)
-        if emergency:
-            self._invalidate_emergency_preview()
-        else:
-            self._invalidate_ai_preview()
-
     def _send_ai(self) -> None:
-        self._send_prepared(self.ai_prepared, self.profile_var.get(), self.ai_result_text)
+        if self.ai_prepared is None:
+            self._prepare_ai()
+        if self.ai_prepared is not None:
+            self._send_prepared(self.ai_prepared, self.profile_var.get(), self.ai_result_text)
 
     def _send_emergency(self) -> None:
+        if self.emergency_prepared is None:
+            self._prepare_emergency()
+        if self.emergency_prepared is None:
+            return
         self._send_prepared(
             self.emergency_prepared,
             self.emergency_profile_var.get(),
@@ -786,7 +763,7 @@ class WardLensApp:
             return
         if prepared is None:
             messagebox.showerror(
-                "尚未預覽", "請先建立並閱讀 outbound 預覽；修改輸入後也必須重新預覽。"
+                "尚未預覽", "請先檢查送出資料；修改輸入後也必須重新確認。"
             )
             return
         if not self._cloud_allowed():
@@ -819,7 +796,7 @@ class WardLensApp:
                 return
         if not messagebox.askyesno(
             "確認送出",
-            f"即將把預覽框中的去識別內容送至 OpenRouter，模型為 {profile.model}。\n\n"
+            f"即將把剛確認的去識別資料與背景 prompt 送至 OpenRouter，模型為 {profile.model}。\n\n"
             f"去識別內容仍可能具有再識別風險；請確認預覽與院內授權。{snapshot_note}\n繼續？",
         ):
             return
@@ -831,6 +808,9 @@ class WardLensApp:
         self._replace_text(output, banner)
         self._cancel_event.clear()
         self._busy = True
+        self.ai_workspace.set_busy(True)
+        self.emergency_workspace.set_busy(True)
+        require_zdr = self.zdr_var.get()
         self.status_var.set(f"正在生成：{profile.label}…")
 
         def worker() -> None:
@@ -839,7 +819,7 @@ class WardLensApp:
                     api_key,
                     prepared,
                     profile,
-                    require_zdr=self.zdr_var.get(),
+                    require_zdr=require_zdr,
                 )
                 last_provider = ""
                 try:
@@ -880,9 +860,17 @@ class WardLensApp:
         threading.Thread(target=worker, daemon=True, name="wardlens-llm").start()
 
     def _copy_ai_prompt(self) -> None:
+        if self.ai_prepared is None:
+            self._prepare_ai()
+        if self.ai_prepared is None:
+            return
         self._copy_prepared(self.ai_prepared)
 
     def _copy_emergency_prompt(self) -> None:
+        if self.emergency_prepared is None:
+            self._prepare_emergency()
+        if self.emergency_prepared is None:
+            return
         self._copy_prepared(self.emergency_prepared)
 
     def _copy_prepared(self, prepared: PreparedRequest | None) -> None:
@@ -1073,6 +1061,9 @@ class WardLensApp:
         )
 
     def _open_developer_settings(self) -> None:
+        if self._busy:
+            messagebox.showwarning("工作進行中", "請等待目前工作完成後再調整設定。")
+            return
         if not self.developer_mode_var.get():
             messagebox.showerror("開發者模式未啟用", "請先勾選啟用開發者模式。")
             return
@@ -1089,8 +1080,6 @@ class WardLensApp:
         self.emergency_prepared = None
         self.ai_preview_status_var.set("開發者設定已變更；必須重新建立預覽")
         self.emergency_preview_status_var.set("開發者設定已變更；必須重新建立預覽")
-        self._replace_text(self.ai_preview_text, "")
-        self._replace_text(self.emergency_preview_text, "")
         self._refresh_model_summary()
         self._apply_developer_state()
 
@@ -1149,6 +1138,9 @@ class WardLensApp:
             return
         self._busy = True
         self.status_var.set(label)
+        # Keep the consented draft unchanged until refresh succeeds or fails.
+        self.ai_workspace.set_busy(True)
+        self.emergency_workspace.set_busy(True)
 
         def worker() -> None:
             try:
@@ -1174,6 +1166,8 @@ class WardLensApp:
 
     def _mark_idle(self) -> None:
         self._busy = False
+        self.ai_workspace.set_busy(False)
+        self.emergency_workspace.set_busy(False)
 
     def _show_error(self, exc: Exception, *, phase: str = "operation") -> None:
         if isinstance(exc, DataLeakRisk):

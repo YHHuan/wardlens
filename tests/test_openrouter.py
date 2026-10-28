@@ -47,6 +47,7 @@ def test_stream_payload_requests_usage() -> None:
 class _Response:
     ok = True
     status_code = 200
+    headers = {"Content-Type": "text/event-stream"}
 
     def __init__(self, payload: dict[str, object]) -> None:
         self.payload = payload
@@ -63,8 +64,10 @@ class _Response:
     def __exit__(self, *_args):
         return None
 
-    def iter_lines(self, **_kwargs):
-        yield from self.payload.get("lines", [])
+    def iter_content(self, *, chunk_size, decode_unicode):
+        assert not decode_unicode
+        for line in self.payload.get("lines", []):
+            yield (line + "\n\n").encode("utf-8")
 
 
 class _Session:

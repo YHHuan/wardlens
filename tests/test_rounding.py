@@ -80,10 +80,39 @@ def test_comparators_and_missing_values_remain_text_and_disable_chart():
 def test_unknown_dates_are_not_replaced_by_fetch_time_or_restored_from_day_codes():
     view = build_rounding_view(bundle_of("Date\tCRP (mg/dL)\nD-40\t2.0\nunknown\t1.5"))
     row = view["trends"][0]
-    assert [point["time"] for point in row["values"]] == ["D-40", "unknown"]
-    assert all(point["timestamp"] == "" for point in row["values"])
+    assert not row["values"] and row["latest_known"] is None
+    assert [point["time"] for point in row["unknown_values"]] == ["D-40", "unknown"]
+    assert row["unknown_values"] == row["all_values"]
+    assert all(point["timestamp"] == "" for point in row["unknown_values"])
+    assert not row["chronology_complete"]
     assert not row["chartable"] and row["span"] == "時間未建立"
-    assert "時間未辨識" in row["note"]
+    assert "時間未辨識" in row["note"] and "已知時間 0 筆／未知時間 2 筆" in row["note"]
+
+
+def test_many_unknown_times_cannot_displace_recent_known_values_or_become_latest():
+    text = "Date\tCRP (mg/dL)\n" + "\n".join(
+        [f"2026-10-{day:02}\t{day}.0" for day in range(20, 27)]
+        + [f"unknown-{index}\t9.9" for index in range(7)]
+    )
+    row = build_rounding_view(bundle_of(text))["trends"][0]
+    assert [point["value"] for point in row["values"]] == ["22.0", "23.0", "24.0", "25.0", "26.0"]
+    assert row["latest_known"] == row["values"][-1]
+    assert row["latest_known"]["time"] == "2026-10-26"
+    assert len(row["unknown_values"]) == 7
+    assert len(row["all_values"]) == row["point_count"] == 14
+    assert not row["chronology_complete"] and not row["chartable"]
+    assert row["span"] == "跨 6 天（依已知時間計）"
+    assert "已知時間 7 筆／未知時間 7 筆" in row["note"]
+
+
+def test_unknown_vital_time_never_replaces_latest_known_measurement():
+    row = build_rounding_view(bundle_of(
+        "Date\tHR bpm\nunknown\t120\n2026-10-30 10:00\t80", "vital_signs",
+    ))["vitals"][0]
+    assert row["latest_known"]["value"] == "80"
+    assert row["values"] == [row["latest_known"]]
+    assert row["unknown_values"][0]["value"] == "120"
+    assert not row["chronology_complete"]
 
 
 def test_transposed_table_preserves_merged_date_clock_headers():
@@ -144,6 +173,7 @@ def test_same_timestamp_conflict_is_visible_not_arbitrarily_deduplicated():
     row = view["trends"][0]
     assert row["point_count"] == 2 and not row["chartable"]
     assert "不同數值" in row["note"] and "核對量測時間" in row["note"]
+    assert row["latest_known"] is None and not row["chronology_complete"]
 
 
 def test_vitals_keep_original_times_and_do_not_invent_missing_fields():

@@ -198,22 +198,22 @@ def _series(points: list[dict]) -> list[dict]:
             groups[(point["label"], point["unit"])].append(point)
     output = []
     for (label, unit), items in groups.items():
-        # Unknown times stay explicitly unknown, never substitute fetch time.
-        items.sort(key=lambda item: (
-            not bool(item["timestamp"]),
-            datetime.fromisoformat(item["timestamp"]) if item["timestamp"] else datetime.max.replace(tzinfo=EMR_TIMEZONE),
-        ))
-        known_times = all(item["timestamp"] for item in items)
+        # Unknown observations remain available, but never become a latest value
+        # or displace known observations from the compact chronological preview.
+        known = sorted((item for item in items if item["timestamp"]),
+                       key=lambda item: datetime.fromisoformat(item["timestamp"]))
+        unknown = [item for item in items if not item["timestamp"]]
+        items = known + unknown
         numeric = all(item["numeric"] is not None for item in items)
         collisions: dict[str, set[str]] = defaultdict(set)
         for item in items:
             if item["timestamp"]:
                 collisions[item["timestamp"]].add(item["value"])
         conflict = any(len(values) > 1 for values in collisions.values())
-        notes = []
+        notes = [f"已知時間 {len(known)} 筆／未知時間 {len(unknown)} 筆"]
         if not unit:
             notes.append("單位未提供")
-        if not known_times:
+        if unknown:
             notes.append("含時間未辨識資料，無法建立完整時序")
         if not numeric:
             notes.append("含缺值、比較符或非純數值，保留原文")
@@ -221,14 +221,25 @@ def _series(points: list[dict]) -> list[dict]:
             notes.append("相同日期／時間標記有不同數值，請核對量測時間與來源")
         if len(items) == 1:
             notes.append("僅一筆，不能判斷趨勢")
-        if len(items) > 5:
-            notes.append(f"先顯示最近 5／{len(items)} 筆，完整資料可展開")
+        if len(known) > 5:
+            notes.append(f"先顯示最近 5／{len(known)} 筆已知時間資料，完整資料可展開")
         values = [{key: item[key] for key in ("value", "time", "source_id", "timestamp", "time_precision", "numeric")} for item in items]
+        known_values, unknown_values = values[:len(known)], values[len(known):]
+        latest = known_values[-1] if known_values else None
+        if latest and len(collisions[latest["timestamp"]]) > 1:
+            # A tied timestamp with conflicting results cannot identify one
+            # current value. Keep both original results in the source details.
+            latest = None
+        span = _span(known)
+        if known and unknown:
+            span += "（依已知時間計）"
         output.append({
             "label": label, "unit": unit, "group": items[0]["group"],
-            "values": values[-5:], "all_values": values, "point_count": len(values),
-            "span": _span(items), "note": "；".join(notes),
-            "chartable": bool(unit and known_times and numeric and len(items) > 1 and not conflict),
+            "values": known_values[-5:], "all_values": values, "point_count": len(values),
+            "latest_known": latest, "unknown_values": unknown_values,
+            "chronology_complete": not unknown and not conflict,
+            "span": span, "note": "；".join(notes),
+            "chartable": bool(unit and not unknown and numeric and len(items) > 1 and not conflict),
             "_order": items[0]["order"],
         })
     output.sort(key=lambda item: (item["_order"], item["label"], item["unit"]))
@@ -240,8 +251,11 @@ def _series(points: list[dict]) -> list[dict]:
 def build_rounding_view(bundle: PatientBundle) -> dict:
     """Return JSON-safe local view data; exact source text remains available.
 
-    `values` holds up to five recent points; `all_values` retains every parsed
-    point. Plot only when `chartable` is true, using `timestamp`, not equal gaps.
+    `values` holds up to five recent points with known times; `unknown_values`
+    keeps observations that cannot be ordered and `all_values` retains both.
+    `latest_known` is null if no time is known or the latest timestamp conflicts.
+    `chronology_complete` excludes unknown times and conflicting timestamps.
+    Plot only when `chartable` is true, using `timestamp`, not equal gaps.
     Show original `time` in labels; day-only timestamps are coordinates, not an
     assertion that sampling occurred at midnight (`time_precision` records this).
     `numeric` is null for missing/comparison/non-numeric results. No reference

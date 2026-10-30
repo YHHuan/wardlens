@@ -31,8 +31,22 @@
     const known = (row.values || []).filter(hasTime).sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
     const allKnown = all.filter(hasTime).sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
     const unknown = row.unknown_values || all.filter(point => !hasTime(point));
-    const latest = row.latest_known && hasTime(row.latest_known) ? row.latest_known : allKnown[allKnown.length - 1] || null;
-    return {known, unknown, latest};
+    // A present null is deliberate (for example conflicting values at the same time).
+    // Only old DTOs that omit the field may infer a latest known observation.
+    const latest = Object.prototype.hasOwnProperty.call(row, "latest_known")
+      ? row.latest_known && hasTime(row.latest_known) ? row.latest_known : null
+      : allKnown[allKnown.length - 1] || null;
+    const observations = new Map();
+    for (const point of allKnown) {
+      const time = Date.parse(point.timestamp);
+      if (!observations.has(time)) observations.set(time, new Set());
+      observations.get(time).add(point.value);
+    }
+    const hasConflicts = [...observations.values()].some(values => values.size > 1);
+    const separators = known.map((point, index) => !index ? "" : Date.parse(point.timestamp) > Date.parse(known[index - 1].timestamp) ? "→" : "/");
+    const latestConflict = Object.prototype.hasOwnProperty.call(row, "latest_known") && latest === null && allKnown.length > 0;
+    const lastKnownTime = allKnown.length ? allKnown[allKnown.length - 1].time || "" : "";
+    return {known, unknown, latest, separators, hasConflicts, latestConflict, lastKnownTime};
   }
   if (typeof module === "object" && module.exports) module.exports = {nextRevision, shouldAdoptDraft, buildDeveloperConfig, validPlotPoints, trendPresentation};
   if (typeof document === "undefined") return;
@@ -302,14 +316,16 @@
       const uncertain = presentation.unknown.length > 0;
       const tr = element("tr"), label = element("td", row.label, "trend-label"); label.append(element("span", row.unit || "單位未提供", "trend-unit"));
       const trend = element("td"), chain = element("div", null, "trend-chain");
-      values.forEach((point, index) => { if (index) chain.append(element("span", "→", "trend-arrow")); const value = element("span", point.value); value.title = point.time || "時間未辨識"; chain.append(value); });
+      values.forEach((point, index) => { if (index) chain.append(element("span", presentation.separators[index], "trend-arrow")); const value = element("span", point.value); value.title = point.time || "時間未辨識"; chain.append(value); });
       if (!values.length) chain.append(document.createTextNode("未辨識到可比較數值"));
       trend.append(chain); const chart = sparkline(row); if (chart) trend.append(chart);
+      if (presentation.hasConflicts) trend.append(element("p", "同時點數值衝突，請核對", "trend-span warning"));
       if (uncertain) trend.append(element("p", "時間未明：" + presentation.unknown.map(point => point.value).join(" / "), "trend-span warning"));
-      const last = element("td", latest ? latest.value : "時間未明", "trend-last"); if (latest) last.title = latest.time || "時間未辨識";
+      const last = element("td", latest ? latest.value : presentation.latestConflict ? "數值衝突，請核對" : "時間未明", "trend-last"); if (latest) last.title = latest.time || "時間未辨識";
       if (uncertain) last.append(element("span", "另有時間未明值", "trend-unit"));
       const span = element("td", row.span || "時間範圍未建立", "trend-span");
       if (latest && latest.time) span.append(element("p", "最後量測：" + latest.time));
+      else if (presentation.latestConflict && presentation.lastKnownTime) span.append(element("p", "同時點衝突：" + presentation.lastKnownTime));
       if (row.note) span.append(element("p", row.note));
       const detailsCell = element("td"), details = element("details", null, "trend-details"), entries = element("ul"); details.append(element("summary", "時間 / 來源"));
       for (const point of row.all_values || values) {
@@ -331,8 +347,9 @@
       const strip = element("div", null, "vitals-strip");
       for (const row of view.vitals) {
         const presentation = trendPresentation(row), latest = presentation.latest, cell = element("div", null, "vital");
-        const value = element("div", latest ? latest.value : presentation.unknown.length ? presentation.unknown.map(point => point.value).join(" / ") : "未提供", "vital-value"); if (row.unit) value.append(element("small", row.unit));
-        cell.append(element("div", row.label, "vital-label"), value, element("div", latest && latest.time ? latest.time : "量測時間未辨識", "vital-time"));
+        const value = element("div", latest ? latest.value : presentation.latestConflict ? "數值衝突，請核對" : presentation.unknown.length ? presentation.unknown.map(point => point.value).join(" / ") : "未提供", "vital-value"); if (row.unit && !presentation.latestConflict) value.append(element("small", row.unit));
+        cell.append(element("div", row.label, "vital-label"), value, element("div", latest && latest.time ? latest.time : presentation.latestConflict ? presentation.lastKnownTime || "同時點數值衝突" : "量測時間未辨識", "vital-time"));
+        if (presentation.hasConflicts && !presentation.latestConflict) cell.append(element("div", "同時點數值衝突，請核對", "vital-time warning"));
         if (presentation.unknown.length) cell.append(element("div", latest ? "時間未明另有：" + presentation.unknown.map(point => point.value).join(" / ") : "請展開來源核對時間", "vital-time warning"));
         strip.append(cell);
       }

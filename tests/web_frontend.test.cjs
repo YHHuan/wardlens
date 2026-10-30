@@ -112,6 +112,37 @@ test("unknown-time values are never presented as the latest observation", () => 
   assert.equal(ui.trendPresentation({values: [unknown]}).latest, null);
 });
 
+test("explicitly unresolved latest observation never chooses one side of a timestamp conflict", () => {
+  const earlier = {timestamp: "2026-10-29T08:00:00+08:00", value: "4.0"};
+  const collisionA = {timestamp: "2026-10-30T08:00:00+08:00", time: "10/30 08:00", value: "1.5", source_id: "SRC-001"};
+  const collisionB = {...collisionA, value: "8.0", source_id: "SRC-002"};
+  const row = {values: [earlier, collisionA, collisionB], all_values: [earlier, collisionA, collisionB], latest_known: null};
+  const result = ui.trendPresentation(row);
+  assert.equal(result.latest, null);
+  assert.equal(result.latestConflict, true);
+  assert.equal(result.hasConflicts, true);
+  assert.equal(result.lastKnownTime, "10/30 08:00");
+  assert.deepEqual(result.separators, ["", "→", "/"]);
+  assert.equal(ui.trendPresentation({...row, values: [collisionB, collisionA, earlier]}).latest, null);
+  assert.equal(ui.trendPresentation({...row, latest_known: earlier}).latest, earlier);
+  assert.equal(ui.trendPresentation({values: [earlier, collisionA]}).latest, collisionA);
+  assert.equal(ui.trendPresentation({values: [], latest_known: null}).latestConflict, false);
+});
+
+test("incomplete chronology keeps known-time arrows but never orders equal-time values", () => {
+  const first = {timestamp: "2026-10-29T08:00:00+08:00", value: "4.0"};
+  const second = {timestamp: "2026-10-30T08:00:00+08:00", value: "1.5"};
+  const unknown = {timestamp: "", value: "9.0"};
+  const result = ui.trendPresentation({values: [first, second], all_values: [first, second, unknown], latest_known: second, chronology_complete: false});
+  assert.deepEqual(result.separators, ["", "→"]);
+  assert.equal(result.latest, second);
+  assert.equal(result.latestConflict, false);
+  assert.equal(result.hasConflicts, false);
+  const duplicate = ui.trendPresentation({values: [first, first, second], latest_known: second});
+  assert.deepEqual(duplicate.separators, ["", "/", "→"]);
+  assert.equal(duplicate.hasConflicts, false);
+});
+
 test("bundled frontend has no browser persistence, HTML sink or remote asset dependency", () => {
   const app = fs.readFileSync(path.join(assets, "app.js"), "utf8");
   const renderer = fs.readFileSync(path.join(assets, "markdown.js"), "utf8");

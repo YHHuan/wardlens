@@ -4,6 +4,7 @@
   // Pure helpers are exported for development tests; clinical state stays private.
   function nextRevision(local, remote) { return Math.max(Number(local) || 0, Number(remote) || 0) + 1; }
   function shouldAdoptDraft(remote, local, dirty, force) { return Boolean(force || (!dirty && Number(remote) > Number(local))); }
+  function shouldRenderAnswer(remote, local, dirty) { return !dirty && Number.isSafeInteger(remote) && remote === local; }
   function clone(value) { return JSON.parse(JSON.stringify(value)); }
   function buildDeveloperConfig(original, initialProfiles, currentProfiles, initialPrompts, currentPrompts) {
     const result = clone(original);
@@ -19,7 +20,7 @@
     return result;
   }
   function validPlotPoints(row) {
-    if (!row || row.chartable !== true) return [];
+    if (!row || row.chartable !== true || row.has_time_conflict === true) return [];
     const points = (row.values || []).map(point => ({x: Date.parse(point.timestamp || ""), y: point.numeric}));
     if (points.length < 2 || points.some(point => !Number.isFinite(point.x) || typeof point.y !== "number" || !Number.isFinite(point.y))) return [];
     if (points.some((point, index) => index && point.x <= points[index - 1].x)) return [];
@@ -42,13 +43,14 @@
       if (!observations.has(time)) observations.set(time, new Set());
       observations.get(time).add(point.value);
     }
-    const hasConflicts = [...observations.values()].some(values => values.size > 1);
-    const separators = known.map((point, index) => !index ? "" : Date.parse(point.timestamp) > Date.parse(known[index - 1].timestamp) ? "→" : "/");
+    const hasTimeConflict = row.has_time_conflict === true;
+    const hasConflicts = hasTimeConflict || [...observations.values()].some(values => values.size > 1);
+    const separators = known.map((point, index) => !index ? "" : !hasTimeConflict && Date.parse(point.timestamp) > Date.parse(known[index - 1].timestamp) ? "→" : "/");
     const latestConflict = Object.prototype.hasOwnProperty.call(row, "latest_known") && latest === null && allKnown.length > 0;
     const lastKnownTime = allKnown.length ? allKnown[allKnown.length - 1].time || "" : "";
-    return {known, unknown, latest, separators, hasConflicts, latestConflict, lastKnownTime};
+    return {known, unknown, latest, separators, hasConflicts, hasTimeConflict, latestConflict, lastKnownTime};
   }
-  if (typeof module === "object" && module.exports) module.exports = {nextRevision, shouldAdoptDraft, buildDeveloperConfig, validPlotPoints, trendPresentation};
+  if (typeof module === "object" && module.exports) module.exports = {nextRevision, shouldAdoptDraft, shouldRenderAnswer, buildDeveloperConfig, validPlotPoints, trendPresentation};
   if (typeof document === "undefined") return;
 
   const $ = id => document.getElementById(id);
@@ -98,7 +100,7 @@
       let result;
       try { result = await response.json(); } catch (_) { throw new ApiError("本機服務回應不完整，請重新開啟介面。", response.status); }
       if (!response.ok || result.ok === false) {
-        if (response.status === 401 || ["InvalidHost", "InvalidOrigin", "CrossSiteRequest"].includes(result.code)) disconnect("連線授權已失效", "請從 WardLens 控制視窗重新開啟瀏覽器介面。");
+        if (response.status === 401 || ["InvalidHost", "InvalidOrigin", "CrossSiteRequest"].includes(result.code)) disconnect("連線授權已失效", "請從 WardLens 控制視窗按「開啟工作台」。");
         throw new ApiError(typeof result.error === "string" ? result.error : "操作未完成，請重試。", response.status, result.code);
       }
       return result;
@@ -148,7 +150,7 @@
     state = null; developer = null; browserReport = null; knownJobs.clear(); adoptAfterJobs.clear();
     $("copy-text").value = ""; if ($("copy-dialog").open) $("copy-dialog").close();
     $("app-shell").hidden = true; $("connection-screen").hidden = false;
-    setText("connection-title", title || "重新開啟 WardLens"); setText("connection-message", message || "請從 WardLens 控制視窗按「開啟瀏覽器介面」。");
+    setText("connection-title", title || "重新開啟 WardLens"); setText("connection-message", message || "請從 WardLens 控制視窗按「開啟工作台」。");
     clearClipboardIfSame();
   }
   function updateControls() {
@@ -189,6 +191,8 @@
     workspace.revision = nextRevision(workspace.revision, state.drafts[key].revision);
     workspace.dirty = true; workspace.modified = true;
     workspace.draftStatus.textContent = "正在更新草稿…";
+    workspace.answerStatus.textContent = "輸入已更動，尚未生成";
+    workspace.answerStatus.className = "answer-status idle";
     workspace.answerText = ""; workspace.answerSignature = ""; workspace.answer.replaceChildren(element("p", "資料或問題已修改，請重新生成。", "answer-placeholder")); workspace.raw.textContent = "";
     if (previewWorkspace === key) closePreview();
     clearTimeout(workspace.timer);
@@ -256,7 +260,7 @@
     workspaces[key] = {data, question, workflow, profile, cancel, copyAnswer, citations, answer, raw, answerStatus, draftStatus, revision: 0, syncedRevision: -1, dirty: false, modified: false, timer: null, pending: Promise.resolve(), answerText: "", answerSignature: ""};
     for (const field of [data, question]) field.addEventListener("input", () => markDraft(key));
     for (const field of [workflow, profile].filter(Boolean)) field.addEventListener("change", () => markDraft(key));
-    citations.addEventListener("change", () => { workspaces[key].answerSignature = ""; if (state) renderAnswer(key, state.answers[key]); });
+    citations.addEventListener("change", () => { workspaces[key].answerSignature = ""; if (state) renderAnswer(key, state.answers[key], state.drafts[key].revision); });
   }
   function hasDraftEdits() { return Object.values(workspaces).some(workspace => workspace.modified || workspace.question.value.trim()); }
   function renderPatients() {
@@ -319,13 +323,13 @@
       values.forEach((point, index) => { if (index) chain.append(element("span", presentation.separators[index], "trend-arrow")); const value = element("span", point.value); value.title = point.time || "時間未辨識"; chain.append(value); });
       if (!values.length) chain.append(document.createTextNode("未辨識到可比較數值"));
       trend.append(chain); const chart = sparkline(row); if (chart) trend.append(chart);
-      if (presentation.hasConflicts) trend.append(element("p", "同時點數值衝突，請核對", "trend-span warning"));
+      if (presentation.hasConflicts) trend.append(element("p", presentation.hasTimeConflict ? "時間或數值衝突，請核對" : "同時點數值衝突，請核對", "trend-span warning"));
       if (uncertain) trend.append(element("p", "時間未明：" + presentation.unknown.map(point => point.value).join(" / "), "trend-span warning"));
-      const last = element("td", latest ? latest.value : presentation.latestConflict ? "數值衝突，請核對" : "時間未明", "trend-last"); if (latest) last.title = latest.time || "時間未辨識";
+      const last = element("td", latest ? latest.value : presentation.latestConflict ? "時間或數值衝突，請核對" : "時間未明", "trend-last"); if (latest) last.title = latest.time || "時間未辨識";
       if (uncertain) last.append(element("span", "另有時間未明值", "trend-unit"));
       const span = element("td", row.span || "時間範圍未建立", "trend-span");
       if (latest && latest.time) span.append(element("p", "最後量測：" + latest.time));
-      else if (presentation.latestConflict && presentation.lastKnownTime) span.append(element("p", "同時點衝突：" + presentation.lastKnownTime));
+      else if (presentation.latestConflict && presentation.lastKnownTime) span.append(element("p", "衝突資料時間：" + presentation.lastKnownTime));
       if (row.note) span.append(element("p", row.note));
       const detailsCell = element("td"), details = element("details", null, "trend-details"), entries = element("ul"); details.append(element("summary", "時間 / 來源"));
       for (const point of row.all_values || values) {
@@ -347,9 +351,10 @@
       const strip = element("div", null, "vitals-strip");
       for (const row of view.vitals) {
         const presentation = trendPresentation(row), latest = presentation.latest, cell = element("div", null, "vital");
-        const value = element("div", latest ? latest.value : presentation.latestConflict ? "數值衝突，請核對" : presentation.unknown.length ? presentation.unknown.map(point => point.value).join(" / ") : "未提供", "vital-value"); if (row.unit && !presentation.latestConflict) value.append(element("small", row.unit));
-        cell.append(element("div", row.label, "vital-label"), value, element("div", latest && latest.time ? latest.time : presentation.latestConflict ? presentation.lastKnownTime || "同時點數值衝突" : "量測時間未辨識", "vital-time"));
-        if (presentation.hasConflicts && !presentation.latestConflict) cell.append(element("div", "同時點數值衝突，請核對", "vital-time warning"));
+        const value = element("div", latest ? latest.value : presentation.latestConflict ? "時間或數值衝突，請核對" : presentation.unknown.length ? presentation.unknown.map(point => point.value).join(" / ") : "未提供", "vital-value"); if (row.unit && !presentation.latestConflict) value.append(element("small", row.unit));
+        cell.append(element("div", row.label, "vital-label"), value, element("div", latest && latest.time ? latest.time : presentation.latestConflict ? presentation.lastKnownTime || "時間或數值衝突" : "量測時間未辨識", "vital-time"));
+        if (presentation.hasConflicts && !presentation.latestConflict) cell.append(element("div", presentation.hasTimeConflict ? "時間或數值衝突，請核對" : "同時點數值衝突，請核對", "vital-time warning"));
+        if (presentation.hasConflicts && row.note) cell.append(element("div", row.note, "vital-time warning"));
         if (presentation.unknown.length) cell.append(element("div", latest ? "時間未明另有：" + presentation.unknown.map(point => point.value).join(" / ") : "請展開來源核對時間", "vital-time warning"));
         strip.append(cell);
       }
@@ -386,9 +391,11 @@
     workspace.revision = Number(incoming.revision) || 0; workspace.syncedRevision = workspace.revision;
     workspace.dirty = false; workspace.modified = false; workspace.draftStatus.textContent = "";
   }
-  function renderAnswer(key, answer) {
+  function renderAnswer(key, answer, revision) {
     const workspace = workspaces[key];
-    if (workspace.dirty) return;
+    // An old state poll may return after the newest draft was acknowledged.
+    // Dirty alone is insufficient: the answer must belong to this exact revision.
+    if (!shouldRenderAnswer(revision, workspace.revision, workspace.dirty)) return;
     answer = answer || {text: "", status: "idle"};
     const signature = JSON.stringify([answer, workspace.citations.checked]);
     if (workspace.answerSignature === signature) return;
@@ -457,7 +464,7 @@
     setText("snapshot", minutes == null ? "尚未載入這位病人的資料；可直接輸入病況提問" : "資料擷取於 " + minutes + " 分鐘前 · 生命徵象以實際量測時間為準");
     $("snapshot").className = minutes != null && minutes >= 15 ? "muted warning" : "muted";
     renderProfiles(state.profiles || []);
-    for (const key of Object.keys(workspaces)) { adoptDraft(key, state.drafts[key], forceDrafts); renderAnswer(key, state.answers[key]); }
+    for (const key of Object.keys(workspaces)) { adoptDraft(key, state.drafts[key], forceDrafts); renderAnswer(key, state.answers[key], state.drafts[key].revision); }
     renderPatients(); renderOverview(state.overview);
     if (!settingsDirty) {
       $("external-ai").checked = Boolean(state.settings.external_ai_enabled); $("privacy-ack").checked = Boolean(state.settings.privacy_acknowledged);
@@ -666,6 +673,6 @@
   });
   window.addEventListener("pagehide", () => disconnect("重新開啟 WardLens", "請從 WardLens 控制視窗重新開啟介面。"));
   window.addEventListener("pageshow", event => { if (event.persisted) disconnect("重新開啟 WardLens", "為避免恢復過期病人畫面，請從控制視窗重新開啟介面。"); });
-  if (!token) disconnect("開啟 WardLens", "請從 WardLens 控制視窗按「開啟瀏覽器介面」。重新整理網頁後，也請由控制視窗重新開啟。");
+  if (!token) disconnect("開啟 WardLens", "請從 WardLens 控制視窗按「開啟工作台」。重新整理網頁後，也請由控制視窗重新開啟。");
   else poll();
 })();

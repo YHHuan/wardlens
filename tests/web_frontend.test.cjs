@@ -75,6 +75,17 @@ test("unsaved drafts survive polling; only explicit replacement overrides them",
   assert.equal(ui.nextRevision(4, 8), 9);
 });
 
+test("a delayed old answer cannot reappear after a newer draft acknowledgement", () => {
+  assert.equal(ui.shouldRenderAnswer(1, 1, false), true);
+  assert.equal(ui.shouldRenderAnswer(1, 2, true), false);
+  // The rev2 draft POST is now acknowledged: dirty=false, but a rev1 GET arrives late.
+  assert.equal(ui.shouldAdoptDraft(1, 2, false, false), false);
+  assert.equal(ui.shouldRenderAnswer(1, 2, false), false);
+  assert.equal(ui.shouldRenderAnswer(2, 2, false), true);
+  assert.equal(ui.shouldRenderAnswer(2, 2, true), false);
+  assert.equal(ui.shouldRenderAnswer(undefined, 2, false), false);
+});
+
 test("saving unchanged developer fields does not freeze every built-in prompt/model", () => {
   const original = {schema_version: 1, custom_profiles: {deep: {model: "provider/custom", reasoning_effort: "high", max_tokens: null}}, custom_prompts: {qa: "custom qa"}};
   const profiles = {fast: {model: "provider/default", reasoning_effort: "low", max_tokens: null}, deep: original.custom_profiles.deep};
@@ -96,6 +107,7 @@ test("graphs require trustworthy numeric/timestamp metadata and preserve unequal
   const plotted = ui.validPlotPoints({chartable: true, values});
   assert.equal((plotted[1].x - plotted[0].x) / (plotted[2].x - plotted[1].x), 39);
   assert.deepEqual(ui.validPlotPoints({chartable: false, values}), []);
+  assert.deepEqual(ui.validPlotPoints({chartable: true, has_time_conflict: true, values}), []);
   assert.deepEqual(ui.validPlotPoints({chartable: true, values: [values[0], {...values[1], numeric: null}]}), []);
   assert.deepEqual(ui.validPlotPoints({chartable: true, values: [values[0], {...values[1], timestamp: ""}]}), []);
   assert.deepEqual(ui.validPlotPoints({chartable: true, values: [values[0], values[0]]}), []);
@@ -143,6 +155,18 @@ test("incomplete chronology keeps known-time arrows but never orders equal-time 
   assert.equal(duplicate.hasConflicts, false);
 });
 
+test("server time-conflict flag prevents all arrows including mixed day-only and precise times", () => {
+  const prior = {timestamp: "2026-10-29T08:00:00+08:00", value: "4.0", time_precision: "minute"};
+  const dayOnly = {timestamp: "2026-10-30T00:00:00+08:00", value: "1.5", time_precision: "day"};
+  const timed = {timestamp: "2026-10-30T08:00:00+08:00", value: "8.0", time_precision: "minute"};
+  const result = ui.trendPresentation({values: [prior, dayOnly, timed], latest_known: null, has_time_conflict: true});
+  assert.equal(result.hasTimeConflict, true);
+  assert.equal(result.hasConflicts, true);
+  assert.equal(result.latest, null);
+  assert.equal(result.latestConflict, true);
+  assert.deepEqual(result.separators, ["", "/", "/"]);
+});
+
 test("bundled frontend has no browser persistence, HTML sink or remote asset dependency", () => {
   const app = fs.readFileSync(path.join(assets, "app.js"), "utf8");
   const renderer = fs.readFileSync(path.join(assets, "markdown.js"), "utf8");
@@ -155,4 +179,6 @@ test("bundled frontend has no browser persistence, HTML sink or remote asset dep
   assert.doesNotMatch(html, /(?:src|href)\s*=\s*["']https?:/);
   assert.doesNotMatch(html, /\son\w+\s*=/);
   assert.doesNotMatch(css, /@import|url\(/);
+  assert.doesNotMatch(html + app, /開啟瀏覽器介面/);
+  assert.match(html, /開啟工作台/);
 });

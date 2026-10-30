@@ -319,11 +319,21 @@ def test_worker_limit_rejects_excess_connections_then_recovers(assets):
     controller = SyntheticController()
     entered, release = threading.Event(), threading.Event()
     original = controller.state
+    calls = []
 
     def held_state():
+        calls.append(True)
         entered.set()
         assert release.wait(2)
         return original()
+
+    def bounded_status():
+        try:
+            return request(server)[0]
+        except (ConnectionAbortedError, ConnectionResetError, http.client.RemoteDisconnected):
+            # With unread request bytes, an immediate bounded rejection can
+            # arrive as TCP reset on Windows instead of its best-effort 503.
+            return 0
 
     controller.state = held_state
     server = LocalWebServer(controller, assets_dir=assets, idle_timeout=None, max_workers=1).start()
@@ -332,8 +342,8 @@ def test_worker_limit_rejects_excess_connections_then_recovers(assets):
     try:
         worker.start()
         assert entered.wait(1)
-        status, _, _ = request(server)
-        assert status == 503
+        assert bounded_status() in {0, 503}
+        assert len(calls) == 1  # Rejected request never reaches the controller.
         release.set()
         worker.join(2)
         assert not worker.is_alive() and first_result[0][0] == 200
@@ -343,7 +353,7 @@ def test_worker_limit_rejects_excess_connections_then_recovers(assets):
         deadline = time.monotonic() + 1
         recovered = False
         while time.monotonic() < deadline:
-            if request(server)[0] == 200:
+            if bounded_status() == 200:
                 recovered = True
                 break
             time.sleep(0.01)

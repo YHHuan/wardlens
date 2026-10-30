@@ -270,7 +270,7 @@ def build_rounding_view(bundle: PatientBundle) -> dict:
             "time": record.observed_at.isoformat() if record.observed_at else "",
             "content": record.content, "status": record.status,
         })
-        if record.source_type == "medications":
+        if record.source_type in {"medication", "medications"}:
             medications.extend(line.strip() for line in record.content.splitlines() if line.strip())
         if not (record.source_type.startswith("lab_") or record.source_type == "vital_signs"):
             continue

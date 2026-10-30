@@ -147,6 +147,7 @@ Get-ChildItem -LiteralPath $PackageRoot -Recurse -File |
 ) | Set-Content -LiteralPath (Join-Path $RuntimeDir "python314._pth") -Encoding ASCII
 
 Copy-Item -LiteralPath "packaging\Start-WardLens.bat" -Destination $PackageRoot
+Copy-Item -LiteralPath "packaging\Start-WardLens-Desktop.bat" -Destination $PackageRoot
 Copy-Item -LiteralPath "packaging\Diagnose-WardLens.bat" -Destination $PackageRoot
 Copy-Item -LiteralPath "packaging\README-FIRST.txt" -Destination $PackageRoot
 & (Join-Path $PSScriptRoot "build_launcher.ps1") -OutputPath (Join-Path $PackageRoot "WardLens.exe")
@@ -195,6 +196,7 @@ $ProvenanceLines | Set-Content -LiteralPath (Join-Path $ReleaseDir "BUILD_PROVEN
 Invoke-Checked -FilePath $RuntimePython -ArgumentList @("-I", "-B", "-X", "utf8", "-m", "wardlens", "--version") -Label "Portable version test"
 Invoke-Checked -FilePath $RuntimePython -ArgumentList @("-I", "-B", "-X", "utf8", "-m", "wardlens", "--self-test") -Label "Portable core self-test"
 Invoke-Checked -FilePath $RuntimePython -ArgumentList @("-I", "-B", "-X", "utf8", "-m", "wardlens", "--ui-self-test") -Label "Portable visible UI self-test"
+Invoke-Checked -FilePath $RuntimePython -ArgumentList @("-I", "-B", "-X", "utf8", "-m", "wardlens", "--web-self-test") -Label "Portable browser API self-test"
 Invoke-Checked -FilePath $RuntimePython -ArgumentList @("-I", "-B", "-X", "utf8", "-m", "wardlens", "--diagnose") -Label "Portable diagnostic test"
 Invoke-Checked -FilePath "python" -ArgumentList @("scripts\test_windows_launcher.py", "--exe", (Join-Path $PackageRoot "WardLens.exe")) -Label "Native EXE launch tests"
 

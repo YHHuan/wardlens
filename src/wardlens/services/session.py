@@ -213,6 +213,14 @@ class ClinicalSession:
 
         def worker() -> None:
             try:
+                with self._lock:
+                    if self._closed or self.epoch != epoch:
+                        return
+                    if self._cancel.is_set():
+                        self.job["status"] = "cancelled"
+                        if workspace:
+                            self.answers[workspace]["status"] = "cancelled"
+                        return
                 result = work()
                 with self._lock:
                     if self._closed or self.epoch != epoch:
@@ -233,7 +241,10 @@ class ClinicalSession:
                 with self._lock:
                     self.busy = False
                     if self._closed:
-                        self.adapter.logout()
+                        try:
+                            self.adapter.logout()
+                        except Exception:
+                            pass
 
         threading.Thread(target=worker, daemon=True, name="wardlens-local-job").start()
         return {"started": True, "job_id": job_id}
@@ -418,7 +429,9 @@ class ClinicalSession:
         epoch = self.epoch
 
         def work():
-            stream = self.ai.stream(key, prepared, profile, require_zdr=require_zdr)
+            if self._closed or self._cancel.is_set():
+                return {}
+            stream = self.ai.stream(key, prepared, profile, require_zdr=require_zdr, cancel_event=self._cancel)
             try:
                 for event in stream:
                     with self._lock:
@@ -556,8 +569,14 @@ class ClinicalSession:
                 return
             self._closed = True
             self._cancel.set()
-            self.ai.client.cancel()
-            self.adapter.logout()
             self._key = ""
             self._clear(patients=True)
             self.status = "已結束"
+            try:
+                self.ai.client.cancel()
+            except Exception:
+                pass
+            try:
+                self.adapter.logout()
+            except Exception:
+                pass

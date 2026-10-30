@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 
-def check_double_click(exe: Path, directory: str) -> None:
+def check_double_click(exe: Path, directory: str, *, desktop: bool = False) -> None:
     """Open the real no-argument GUI; close only the child of our test launcher."""
     import ctypes as c
     from ctypes import wintypes as w
@@ -39,8 +39,9 @@ def check_double_click(exe: Path, directory: str) -> None:
     user.IsWindowVisible.argtypes = [w.HWND]
     user.GetWindowTextW.argtypes = [w.HWND, w.LPWSTR, c.c_int]
     user.PostMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
-    environment = dict(os.environ, LOCALAPPDATA=directory)
-    process = subprocess.Popen([str(exe)], cwd=directory, env=environment)
+    environment = dict(os.environ, LOCALAPPDATA=directory, WARDLENS_TEST_NO_BROWSER="1")
+    arguments = [str(exe)] + (["--desktop"] if desktop else [])
+    process = subprocess.Popen(arguments, cwd=directory, env=environment)
     try:
         deadline = time.monotonic() + 20
         windows = []
@@ -79,7 +80,7 @@ def check_double_click(exe: Path, directory: str) -> None:
         user.PostMessageW(windows[0], 0x0010, 0, 0)  # WM_CLOSE, our own child only.
         if process.wait(timeout=10) != 0:
             raise RuntimeError("Double-click EXE did not close cleanly.")
-        print("EXE double-click visible GUI passed")
+        print("EXE desktop fallback visible GUI passed" if desktop else "EXE double-click visible GUI passed")
     finally:
         if process.poll() is None:
             subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, timeout=10)
@@ -95,11 +96,13 @@ def main() -> None:
     exe = args.exe.resolve(strict=True)
     with tempfile.TemporaryDirectory(prefix="WardLens launcher 測試 ") as directory:
         check_double_click(exe, directory)
+        check_double_click(exe, directory, desktop=True)
         # Different working directory: the launcher must resolve its OWN folder.
         for flag, marker in (
             ("--version", "WardLens"),
             ("--self-test", "self-test passed"),
             ("--ui-self-test", "UI self-test passed"),
+            ("--web-self-test", "Web self-test passed"),
             ("--diagnose", "PASS"),
         ):
             result = subprocess.run(

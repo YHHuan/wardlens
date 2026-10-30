@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHERS = (
     ROOT / "packaging/Start-WardLens.bat",
+    ROOT / "packaging/Start-WardLens-Desktop.bat",
     ROOT / "packaging/Diagnose-WardLens.bat",
 )
 NATIVE_SUFFIXES = {".com", ".dll", ".exe", ".pyd", ".sys"}
@@ -106,6 +107,7 @@ def _check_package(path: Path) -> list[str]:
         "WardLens.exe",
         "drivers/README.txt",
         "Start-WardLens.bat",
+        "Start-WardLens-Desktop.bat",
         "Diagnose-WardLens.bat",
         "README-FIRST.txt",
         "runtime/python.exe",
@@ -114,6 +116,10 @@ def _check_package(path: Path) -> list[str]:
         "runtime/python314._pth",
         "runtime/DLLs/python.cat",
         "app/wardlens/__main__.py",
+        "app/wardlens/web/assets/index.html",
+        "app/wardlens/web/assets/app.js",
+        "app/wardlens/web/assets/app.css",
+        "app/wardlens/web/assets/markdown.js",
         "packages/requests/__init__.py",
         "packages/bs4/__init__.py",
         "THIRD-PARTY/PYTHON-RUNTIME-SPDX.json",

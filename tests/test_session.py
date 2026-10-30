@@ -162,6 +162,22 @@ def test_busy_and_cancellation_preserve_incomplete_status(session):
     assert session.job["status"] == "cancelled"
 
 
+@pytest.mark.parametrize("close", [False, True])
+def test_queued_generation_never_starts_after_cancel_or_close(session, monkeypatch, close):
+    prepared = preview(session)
+    pending = []
+    monkeypatch.setattr(threading.Thread, "start", lambda thread: pending.append(thread))
+    session.action("generate", prepared)
+    if close:
+        session.close()
+    else:
+        session.action("cancel", {})
+    pending[0].run()
+    assert not session.ai.client.calls
+    if not close:
+        assert session.answers["rounding"]["status"] == "cancelled"
+
+
 def test_failure_is_not_completion_and_get_state_never_starts_a_new_request(session):
     prepared = preview(session)
     session.ai.client.failure = True
@@ -210,6 +226,17 @@ def test_developer_save_invalidates_preview_without_resetting_key(session):
     assert session.state()["has_api_key"]
 
 
+@pytest.mark.parametrize("change_prompt", [False, True])
+def test_developer_save_preserves_legacy_model_when_only_prompt_is_edited(session, change_prompt):
+    session.settings.developer_mode = True
+    session.settings.custom_models = {"fast": "openai/legacy-model"}
+    config = session.action("developer_get", {})["config"]
+    if change_prompt:
+        config["custom_prompts"] = {"rounding": "Use concise clinical language. " * 5}
+    session.action("developer_save", {"config": config})
+    assert session.settings.profile("fast").model == "openai/legacy-model"
+
+
 def test_close_removes_patient_and_draft_references(session):
     choose_demo(session)
     preview(session)
@@ -218,3 +245,13 @@ def test_close_removes_patient_and_draft_references(session):
     assert all(not d["data"] for d in session.drafts.values())
     with pytest.raises(UserError):
         session.state()
+
+
+def test_close_clears_clinical_state_even_when_adapter_cleanup_fails(session, monkeypatch):
+    choose_demo(session)
+    preview(session)
+    def fail():
+        raise RuntimeError("synthetic-sensitive-error")
+    monkeypatch.setattr(session.adapter, "logout", fail)
+    session.close()
+    assert not session.patients and not session.previews and not session._key

@@ -46,8 +46,12 @@ def extract_top_todos(bundle: PatientBundle, maximum: int = 8) -> list[str]:
 def recent_reports(bundle: PatientBundle, maximum: int = 8) -> list[str]:
     output: list[str] = []
     for record in bundle.records_of("report_index", "report"):
+        # An index may contain several reports at different stages. Its own
+        # status must not be assigned to every constituent report.
         status = (
-            f" [{record.status}]" if record.status in {"final", "pending", "preliminary"} else ""
+            f" [{record.status}]"
+            if record.source_type == "report" and record.status in {"final", "pending", "preliminary"}
+            else ""
         )
         lines = [line.strip() for line in record.content.splitlines() if line.strip()]
         for line in lines[:maximum]:

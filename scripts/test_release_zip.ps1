@@ -13,6 +13,7 @@ try {
     $PackageRoot = Join-Path $SmokeRoot "WardLens"
     $Launcher = Join-Path $PackageRoot "Start-WardLens.bat"
     $DiagnosticLauncher = Join-Path $PackageRoot "Diagnose-WardLens.bat"
+    $DesktopLauncher = Join-Path $PackageRoot "Start-WardLens-Desktop.bat"
     if (-not (Test-Path -LiteralPath $Launcher) -or -not (Test-Path -LiteralPath $DiagnosticLauncher)) {
         throw "The extracted ZIP does not contain the expected WardLens launchers."
     }
@@ -23,6 +24,8 @@ try {
     foreach ($Test in @(
         @{ Label = "extracted BAT core test"; Path = $Launcher; Argument = "--self-test" },
         @{ Label = "extracted BAT visible UI test"; Path = $Launcher; Argument = "--ui-self-test" },
+        @{ Label = "extracted BAT browser API test"; Path = $Launcher; Argument = "--web-self-test" },
+        @{ Label = "extracted desktop BAT test"; Path = $DesktopLauncher; Argument = "--ui-self-test" },
         @{ Label = "extracted diagnostic BAT test"; Path = $DiagnosticLauncher; Argument = "" }
     )) {
         $CommandLine = "call `"$($Test.Path)`" $($Test.Argument)"

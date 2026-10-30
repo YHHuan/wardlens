@@ -298,11 +298,20 @@ class AppSettings:
             self.custom_prompts[workflow] = cleaned
 
     def developer_payload(self) -> dict[str, Any]:
+        profiles = {key: dict(profile) for key, profile in self.custom_profiles.items()}
+        # Older releases stored model-only overrides separately. Export their
+        # effective values before an import/save clears the legacy dictionary.
+        for key in self.custom_models:
+            if key not in profiles and key in DEFAULT_PROFILES:
+                effective = self.profile(key)
+                if effective != DEFAULT_PROFILES[key]:
+                    profiles[key] = {
+                        "model": effective.model, "reasoning_effort": effective.reasoning_effort,
+                        "max_tokens": effective.max_tokens,
+                    }
         return {
             "schema_version": DEVELOPER_CONFIG_SCHEMA,
-            "custom_profiles": {
-                key: dict(profile) for key, profile in self.custom_profiles.items()
-            },
+            "custom_profiles": profiles,
             "custom_prompts": dict(self.custom_prompts),
         }
 

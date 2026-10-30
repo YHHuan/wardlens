@@ -189,8 +189,13 @@ class OpenRouterClient:
         profile: ModelProfile,
         *,
         require_zdr: bool = True,
+        cancel_event: threading.Event | None = None,
     ) -> Iterator[StreamEvent]:
+        if cancel_event is not None and cancel_event.is_set():
+            raise OpenRouterError("生成已停止；沒有送出新的生成請求。")
         self.validate_profile(profile, require_zdr=require_zdr)
+        if cancel_event is not None and cancel_event.is_set():
+            raise OpenRouterError("生成已停止；沒有送出新的生成請求。")
         request_id = ""
         provider_name = ""
         emitted = False
@@ -203,6 +208,8 @@ class OpenRouterClient:
             self._active_response = response
         try:
             with response:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise OpenRouterError("生成已停止；內容不完整。")
                 self._raise_for_response(response)
                 content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
                 if content_type and content_type != "text/event-stream":

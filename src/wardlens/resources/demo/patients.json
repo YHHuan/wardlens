@@ -29,14 +29,21 @@
           "title": "生化趨勢",
           "source_record_id": "demo-a-chem",
           "observed_at": "2026-08-27T06:10:00+08:00",
-          "content": "Date\tNa\tK\tCr\tCRP\n2026-08-25\t137\t3.8\t1.0\t15.2\n2026-08-26\t138\t3.6\t1.1\t11.4\n2026-08-27\t139\t3.7\t1.0\t7.8"
+          "content": "Date\tNa (mmol/L)\tK (mmol/L)\tCr (mg/dL)\tCRP (mg/dL)\n2026-08-25\t137\t3.8\t1.0\t15.2\n2026-08-26\t138\t3.6\t1.1\t11.4\n2026-08-27\t139\t3.7\t1.0\t7.8"
         },
         {
           "source_type": "lab_cbc",
           "title": "CBC 趨勢",
           "source_record_id": "demo-a-cbc",
           "observed_at": "2026-08-27T06:10:00+08:00",
-          "content": "Date\tWBC\tHb\tPlt\n2026-08-25\t15.1\t12.8\t228\n2026-08-26\t12.3\t12.2\t235\n2026-08-27\t9.8\t12.0\t241"
+          "content": "Date\tWBC (10^3/uL)\tHb (g/dL)\tPlt (10^3/uL)\n2026-08-25\t15.1\t12.8\t228\n2026-08-26\t12.3\t12.2\t235\n2026-08-27\t9.8\t12.0\t241"
+        },
+        {
+          "source_type": "vital_signs",
+          "title": "合成生命徵象",
+          "source_record_id": "demo-a-tpr",
+          "observed_at": "2026-08-27T07:30:00+08:00",
+          "content": "Date\tT (°C)\tBP (mmHg)\tHR (bpm)\tRR (/min)\tSpO2 (%)\n2026-08-27 03:30\t37.8\t112/66\t98\t22\t93\n2026-08-27 07:30\t37.4\t118/68\t92\t20\t94"
         },
         {
           "source_type": "medication",
@@ -65,7 +72,7 @@
       "records": [
         {"source_type": "admission_note", "title": "最新入院病歷", "source_record_id": "demo-b-adm", "observed_at": "2026-08-26T12:00:00+08:00", "content": "TODO: trend hemoglobin; clarify last NSAID dose.\nA 54-year-old woman was admitted for melena and dizziness."},
         {"source_type": "progress_note", "title": "近期 Progress Notes", "source_record_id": "demo-b-prg", "observed_at": "2026-08-27T08:00:00+08:00", "content": "No recurrent melena overnight. BP 106/64 mmHg, HR 86 bpm. Awaiting endoscopy."},
-        {"source_type": "lab_cbc", "title": "CBC 趨勢", "source_record_id": "demo-b-cbc", "observed_at": "2026-08-27T06:20:00+08:00", "content": "Date\tHb\tPlt\n2026-08-26\t9.4\t206\n2026-08-27\t8.8\t198"},
+        {"source_type": "lab_cbc", "title": "CBC 趨勢", "source_record_id": "demo-b-cbc", "observed_at": "2026-08-27T06:20:00+08:00", "content": "Date\tHb (g/dL)\tPlt (10^3/uL)\n2026-08-26\t9.4\t206\n2026-08-27\t8.8\t198"},
         {"source_type": "report_index", "title": "近期報告索引", "source_record_id": "demo-b-report", "status": "pending", "content": "Upper endoscopy report: pending."}
       ]
     },
@@ -79,7 +86,7 @@
       "case_no": "DEMO-A03",
       "records": [
         {"source_type": "admission_note", "title": "最新入院病歷", "source_record_id": "demo-c-adm", "observed_at": "2026-08-24T15:00:00+08:00", "content": "TODO: daily weight; monitor creatinine after diuresis.\nA 72-year-old man with heart failure was admitted for worsening leg edema."},
-        {"source_type": "lab_chemistry", "title": "生化趨勢", "source_record_id": "demo-c-chem", "observed_at": "2026-08-27T06:30:00+08:00", "content": "Date\tCr\tK\n2026-08-25\t1.4\t4.2\n2026-08-26\t1.6\t3.8\n2026-08-27\t1.8\t3.5"}
+        {"source_type": "lab_chemistry", "title": "生化趨勢", "source_record_id": "demo-c-chem", "observed_at": "2026-08-27T06:30:00+08:00", "content": "Date\tCr (mg/dL)\tK (mmol/L)\n2026-08-25\t1.4\t4.2\n2026-08-26\t1.6\t3.8\n2026-08-27\t1.8\t3.5"}
       ]
     },
     {"histno": "90000004", "name": "測試丁", "ward": "D101", "bed": "04", "age": "63", "sex": "F", "case_no": "DEMO-A04", "records": [{"source_type": "admission_note", "title": "最新入院病歷", "source_record_id": "demo-04", "content": "TODO: reconcile insulin regimen. Synthetic diabetes admission."}]},

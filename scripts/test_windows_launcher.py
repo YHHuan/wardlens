@@ -94,7 +94,9 @@ def main() -> None:
     if sys.platform != "win32":
         raise SystemExit("This test requires Windows.")
     exe = args.exe.resolve(strict=True)
-    with tempfile.TemporaryDirectory(prefix="WardLens launcher 測試 ") as directory:
+    # Windows can retain a scan/loader handle on the intentionally standalone
+    # EXE after it exits. Cleanup must not conceal the functional test outcome.
+    with tempfile.TemporaryDirectory(prefix="WardLens launcher 測試 ", ignore_cleanup_errors=True) as directory:
         check_double_click(exe, directory)
         check_double_click(exe, directory, desktop=True)
         # Different working directory: the launcher must resolve its OWN folder.
@@ -128,6 +130,8 @@ def main() -> None:
             print(json.dumps(report, ensure_ascii=False, indent=2))
             if result.returncode or report["result"] != "PASS":
                 raise RuntimeError("Real browser probe did not pass; inspect safe report above.")
+    if Path(directory).exists():
+        print("WARNING: Windows retained a temporary synthetic-test file; cleanup was deferred.")
 
 
 if __name__ == "__main__":

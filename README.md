@@ -159,4 +159,4 @@ py -3.14 -m venv .venv
 - [max870121/Autogenerate-admission](https://github.com/max870121/Autogenerate-admission)
 - [medinoter](https://medinoter.vercel.app/)（介面／workflow 概念參考）
 
-前三個 repository 未附明確 license，因此本專案只用公開 endpoint 行為作相容性研究，程式碼從零實作；不要把上游原始碼直接貼入本專案。
+本專案參考公開 endpoint 行為與查房欄位安排，程式碼自行實作。本版沒有複製上游程式碼；日後若要重用，須先核對各專案的授權文件與條件。

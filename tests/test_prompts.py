@@ -23,7 +23,9 @@ def test_prepared_prompt_is_deidentified_and_parseable() -> None:
     assert "90000001" not in prepared.preview.text
     assert "2026-08-25" not in prepared.preview.text
     assert "<clinical_source" in parsed.user
-    assert "[SRC-" in parsed.system
+    assert "主文不輸出" in parsed.system
+    assert "[SRC-" not in parsed.system
+    assert "SRC-" in parsed.user  # Source metadata remains available for verification.
     assert weak_label not in prepared.preview.text
     assert "hash=" not in parsed.user
     assert prepared.source_fetched_at == bundle.fetched_at

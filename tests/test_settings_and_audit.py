@@ -45,6 +45,16 @@ def test_custom_budget_above_former_32000_limit_is_supported():
     assert settings.profile("deep").max_tokens == 65536
 
 
+def test_legacy_model_override_survives_developer_export_import():
+    settings = AppSettings(custom_models={"fast": "openai/legacy-model"})
+    payload = settings.developer_payload()
+    assert set(payload["custom_profiles"]) == {"fast"}  # Do not freeze untouched defaults.
+    imported = AppSettings()
+    imported.apply_developer_payload(payload)
+    assert imported.profile("fast").model == "openai/legacy-model"
+    assert imported.profile("fast").max_tokens is None
+
+
 def test_settings_round_trip(tmp_path) -> None:
     path = tmp_path / "settings.json"
     settings = AppSettings(demo_mode=False, max_patients=42)

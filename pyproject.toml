@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wardlens"
-version = "0.6.0"
+version = "0.7.0"
 description = "Privacy-first portable rounding assistant for Taiwanese inpatient clinicians"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -31,7 +31,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-wardlens = ["resources/prompts/*.txt", "resources/demo/*.json", "resources/browser/*.json"]
+wardlens = ["resources/prompts/*.txt", "resources/demo/*.json", "resources/browser/*.json", "web/assets/*.html", "web/assets/*.css", "web/assets/*.js"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

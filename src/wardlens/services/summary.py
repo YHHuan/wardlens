@@ -6,27 +6,52 @@ from wardlens.models import EMR_TIMEZONE, PatientBundle, SourceRecord
 from wardlens.services.history import coverage_summary, window_description
 
 _todo_pattern = re.compile(
-    r"(?i)(?:^|\b)(?:todo|to[- ]?do|pending|follow(?:\s|-)?up|recheck|待辦|追蹤|確認|補|安排)\b"
+    r"(?i)^(?:(?:todo|to[- ]?do|pending|follow(?:\s|-)?up|recheck)\b|待辦|待追蹤|待確認|追蹤|確認|補抽|安排|複查)"
+)
+_todo_heading = re.compile(r"(?i)^(?:todo|to[- ]?do|pending(?:\s+items)?|待辦(?:事項)?)\s*[:：]?$")
+_note_heading = re.compile(
+    r"(?i)^(?:chief complaint|history of present illness|past medical history|assessment(?:\s*&\s*plan)?|plan|allergies|medications|CC|HPI|PMH|A/P|主訴|現病史|過去病史|診斷|治療計畫)(?:\s*\([^)]*\))?\s*(?:[:：]|$)"
 )
 
 
-def extract_top_todos(bundle: PatientBundle, maximum: int = 8) -> list[str]:
+def admission_top_items(bundle: PatientBundle, maximum: int = 8) -> tuple[str, list[str]]:
+    """Separate explicit tasks from an unclassified admission-note excerpt."""
     admission_records = bundle.records_of("admission_note")
     if not admission_records:
-        return []
+        return "none", []
     latest = _latest(admission_records)
-    top_lines = [line.strip(" -•\t") for line in latest.content.splitlines()[:24] if line.strip()]
-    matched = [line for line in top_lines if _todo_pattern.search(line)]
+    top_lines = latest.content.splitlines()[:24]
+    matched: list[str] = []
+    in_section = False
+    for raw_line in top_lines:
+        line = re.sub(r"^\d+[.)、]\s*", "", raw_line.strip().lstrip("-•*#\t "))
+        if not line or _note_heading.match(line):
+            in_section = False
+            continue
+        if _todo_heading.fullmatch(line):
+            in_section = True
+        elif in_section or _todo_pattern.search(line):
+            matched.append(line)
     if matched:
-        return matched[:maximum]
-    return top_lines[: min(5, maximum)]
+        return "todo", matched[:maximum]
+    excerpt = [line.strip() for line in top_lines if line.strip()][: min(5, maximum)]
+    return ("excerpt", excerpt) if excerpt else ("none", [])
+
+
+def extract_top_todos(bundle: PatientBundle, maximum: int = 8) -> list[str]:
+    kind, items = admission_top_items(bundle, maximum)
+    return items if kind == "todo" else []
 
 
 def recent_reports(bundle: PatientBundle, maximum: int = 8) -> list[str]:
     output: list[str] = []
     for record in bundle.records_of("report_index", "report"):
+        # An index may contain several reports at different stages. Its own
+        # status must not be assigned to every constituent report.
         status = (
-            f" [{record.status}]" if record.status in {"final", "pending", "preliminary"} else ""
+            f" [{record.status}]"
+            if record.source_type == "report" and record.status in {"final", "pending", "preliminary"}
+            else ""
         )
         lines = [line.strip() for line in record.content.splitlines() if line.strip()]
         for line in lines[:maximum]:
@@ -43,10 +68,10 @@ def render_bundle_overview(bundle: PatientBundle) -> str:
         f"資料截止：{bundle.fetched_at.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')}",
         f"已取得來源：{len(bundle.records)}",
         "",
-        "待辦／入院病歷頂端：",
     ]
-    todos = extract_top_todos(bundle)
-    lines.extend([f"- {todo}" for todo in todos] or ["- 未辨識；請直接核對原始 admission note。"])
+    kind, items = admission_top_items(bundle)
+    lines.append("入院紀錄頂端摘錄（未辨識明確待辦）：" if kind == "excerpt" else "入院紀錄頂端待辦：")
+    lines.extend([f"- {item}" for item in items] or ["- 未辨識；請直接核對原始 admission note。"])
     lines.extend(["", "近期／Pending 報告："])
     reports = recent_reports(bundle)
     lines.extend([f"- {report}" for report in reports] or ["- 未取得報告索引；不代表沒有報告。"])

@@ -1,14 +1,16 @@
 # 瀏覽器相容性測試
 
-v0.6.0 提供獨立測試，確認院內電腦是否能啟動 Edge WebDriver、讀取中文、讀取 18 列表格、點擊按鈕並等候動態更新。目前使用 Selenium 同樣採用的 W3C WebDriver 介面，沒有內附 Selenium Python SDK，也尚未把 EMR 抓取改成瀏覽器操作。
+v0.7.0 的本機網頁工作台直接使用瀏覽器，**不需要 WebDriver，也不必先跑這項測試**；病歷擷取仍使用原本的 Requests 流程。網頁的開啟／重開與桌面備援見 [本機工作台](LOCAL_UI.md)。
+
+本頁是 v0.6.0 起提供的獨立測試，確認電腦是否能啟動 Edge WebDriver、讀取中文、讀取 18 列表格、點擊按鈕並等候動態更新。它使用 Selenium 同樣採用的 W3C WebDriver 介面，沒有內附 Selenium Python SDK，也尚未把 EMR 抓取改成瀏覽器操作。這項 PASS 不能當成整套 Selenium EMR 已驗收。
 
 ## 操作
 
 1. 完整解壓縮 Portable ZIP，開啟 `WardLens.exe`，進入「瀏覽器測試」。不需要登入醫院或 OpenRouter。
-2. 先按「執行本機瀏覽器測試」。沒有驅動或版本不合仍能產生診斷紀錄。
+2. 先按「執行本機測試」（桌面備援為「執行本機瀏覽器測試」）。沒有驅動或版本不合仍能產生診斷紀錄。
 3. 若顯示 `DRIVER_NOT_PREPARED`，可在自己的連網電腦按「從 Microsoft 準備驅動（需外網）」。它只下載版本鎖定的官方驅動，核對 ZIP／EXE SHA-256，保留附帶授權文件；不安裝、不更改系統政策。再將整個資料夾帶到自己的測試電腦。
 4. 再執行測試。通過版本與 hash 檢查後，會暫時開啟合成測試頁，結束時關閉該測試工作階段。
-5. 按「儲存診斷紀錄…」，回傳 `WardLens-Browser-Diagnostics.txt`，PASS／FAIL 都有用。
+5. 按「儲存診斷紀錄」，回傳 `WardLens-Browser-Diagnostics.txt`，PASS／FAIL 都有用。
 
 公開 ZIP 沒有內附 Microsoft WebDriver：其附帶 EULA 第 3.e 節限制重新散布。請勿把個人準備過、含驅動的整包重新公開發布。若院內不能下載，可先在自己的電腦準備；若無法準備，先回傳版本紀錄即可。
 

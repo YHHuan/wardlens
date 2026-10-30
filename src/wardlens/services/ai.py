@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
+from threading import Event
 
 from wardlens.llm.openrouter import OpenRouterClient, StreamEvent
 from wardlens.llm.prompts import PromptBuilder, PromptEnvelope
@@ -112,15 +113,14 @@ class AIWorkflowService:
         profile: ModelProfile,
         *,
         require_zdr: bool = True,
+        cancel_event: Event | None = None,
     ) -> Iterator[StreamEvent]:
         envelope = self._verified_envelope(prepared)
         try:
-            yield from self.client.stream(
-                api_key,
-                envelope,
-                profile,
-                require_zdr=require_zdr,
-            )
+            options = {"require_zdr": require_zdr}
+            if cancel_event is not None:
+                options["cancel_event"] = cancel_event
+            yield from self.client.stream(api_key, envelope, profile, **options)
         except Exception:
             self._audit(
                 "llm_request", prepared.preview.sha256, model=profile.model, outcome="failed"

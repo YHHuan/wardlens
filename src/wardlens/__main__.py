@@ -21,6 +21,12 @@ def _dispatch(arguments: list[str]) -> None:
         run_ui_self_test()
         print("WardLens packaged UI self-test passed.")
         return
+    if "--web-self-test" in arguments:
+        from wardlens.web.selftest import run_web_self_test
+
+        run_web_self_test()
+        print("WardLens packaged Web self-test passed.")
+        return
     if "--diagnose" in arguments:
         from wardlens.selftest import run_diagnostics
 
@@ -37,7 +43,12 @@ def _dispatch(arguments: list[str]) -> None:
         print(text)
         return
     try:
-        from wardlens.app import main as app_main
+        if "--desktop" in arguments:
+            from wardlens.app import main as app_main
+
+            arguments = [arg for arg in arguments if arg != "--desktop"]
+        else:
+            from wardlens.web.launcher import main as app_main
     except ModuleNotFoundError as exc:
         if exc.name == "tkinter":
             raise SystemExit(
@@ -56,7 +67,7 @@ def main(argv: list[str] | None = None) -> None:
     except Exception as exc:
         from wardlens.startup import report_unhandled_exception
 
-        noninteractive = {"--self-test", "--ui-self-test", "--diagnose", "--version", "--browser-diagnostics"}
+        noninteractive = {"--self-test", "--ui-self-test", "--web-self-test", "--diagnose", "--version", "--browser-diagnostics"}
         report_unhandled_exception(
             type(exc),
             exc,

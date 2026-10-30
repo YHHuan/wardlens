@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>WardLens · 查房工作台</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <script defer src="/assets/markdown.js"></script>
+  <script defer src="/assets/app.js"></script>
+</head>
+<body>
+  <div id="connection-screen" class="connection-screen" hidden>
+    <div class="connection-card">
+      <div class="brand-mark" aria-hidden="true">W</div>
+      <h1 id="connection-title">開啟 WardLens</h1>
+      <p id="connection-message">請從 WardLens 控制視窗按「開啟工作台」。重新整理網頁後也需由控制視窗重新開啟。</p>
+      <p class="muted">病人資料不會儲存在這個網頁；重新連線後可帶入程式記憶體中的資料。</p>
+    </div>
+  </div>
+  <div id="app-shell">
+    <header class="app-header">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">W</span><span>WardLens <small id="version"></small></span></div>
+      <p class="header-status" id="status" role="status" aria-live="polite">正在連線…</p>
+      <button id="close-app" class="quiet danger-text" type="button">結束 WardLens</button>
+    </header>
+    <div class="app-layout">
+      <aside class="sidebar" aria-label="登入與病人清單">
+        <details class="login-panel" id="login-panel" open>
+          <summary><span id="login-state">登入</span><span class="muted">院內 / Demo</span></summary>
+          <form id="login-form" autocomplete="off">
+            <label class="check"><input id="demo" type="checkbox" checked data-idle>使用合成資料 Demo</label>
+            <div class="login-fields">
+              <label for="username">入口網帳號</label><input id="username" name="wardlens-user" autocomplete="off" spellcheck="false" data-idle>
+              <label for="password">密碼</label><input id="password" name="wardlens-password" type="password" autocomplete="new-password" data-idle>
+            </div>
+            <div class="button-row"><button id="login-button" class="primary" type="submit" data-idle>登入</button><button id="logout-button" type="button" data-idle>登出清除</button></div>
+          </form>
+        </details>
+        <form id="search-form" class="patient-search" autocomplete="off">
+          <h2>病人清單</h2>
+          <div class="two-fields"><label>醫師燈號<input id="doctor-id" autocomplete="off" data-idle></label><label>病房<input id="ward" autocomplete="off" data-idle></label></div>
+          <details class="compact"><summary>以病歷號查詢</summary><label class="sr-only" for="histnos">病歷號，以逗號或空白分隔</label><textarea id="histnos" rows="2" placeholder="以逗號或空白分隔" autocomplete="off" data-idle></textarea></details>
+          <button id="search-button" type="submit" class="full-width" data-idle>載入病人清單</button>
+        </form>
+        <p class="list-status" id="list-status">尚未載入清單</p>
+        <label class="sr-only" for="patient-filter">篩選已載入病人</label>
+        <input id="patient-filter" class="filter-input" placeholder="篩選姓名、床位或病歷號" autocomplete="off" spellcheck="false">
+        <div id="patient-list" class="patient-list" role="list" aria-label="病人"></div>
+        <div class="sidebar-footer"><button id="export-docx" type="button" class="quiet" data-idle>匯出 Word</button><button id="export-csv" type="button" class="quiet" data-idle>匯出 CSV</button></div>
+      </aside>
+      <main class="main">
+        <div class="patient-heading">
+          <div><p class="eyebrow">目前病人</p><h1 id="selected-patient">選取病人，開始整理</h1><p id="snapshot" class="muted">只在選取後載入資料</p></div>
+          <div class="load-controls"><label>回溯<select id="lookback" data-idle><option value="1">1 個月</option><option value="3" selected>3 個月</option><option value="6">6 個月</option><option value="12">12 個月</option></select></label><button id="load-patient" class="primary" type="button" data-idle>載入 / 更新資料</button></div>
+        </div>
+        <div id="notice" class="notice" role="alert" hidden><span id="notice-text"></span><button id="dismiss-notice" type="button" class="quiet" aria-label="關閉提示">×</button></div>
+        <nav class="tabs" aria-label="工作區">
+          <button type="button" data-tab="rounding" class="active" aria-current="page">查房前整理</button>
+          <button type="button" data-tab="emergency">急症處置</button>
+          <button type="button" data-tab="settings">設定</button>
+          <button type="button" data-tab="browser">瀏覽器測試</button>
+        </nav>
+        <section id="tab-rounding" class="tab-panel">
+          <div id="overview" class="overview"><div class="empty-state"><h2>先看變化，再決定要問什麼</h2><p>載入病人後，這裡會整理生命徵象、待辦與檢驗趨勢。WBC、Hb、PLT 優先顯示，詳細時間和來源可展開。</p></div></div>
+          <div id="rounding-workspace"></div>
+        </section>
+        <section id="tab-emergency" class="tab-panel" hidden>
+          <div class="emergency-guidance"><strong>先處理危急生理問題</strong><span>有立即危險時，同步叫 senior／RRT／Code 支援，不要等待 AI。</span></div>
+          <div id="emergency-workspace"></div>
+        </section>
+        <section id="tab-settings" class="tab-panel settings-panel" hidden>
+          <div class="section-heading"><div><h2>OpenRouter 與資料傳送</h2><p class="muted">Key 留在 Windows 認證管理員，不會回傳到網頁。</p></div><span id="key-state" class="connection-label">尚未設定</span></div>
+          <div class="button-row"><button id="oauth" class="primary" type="button" data-idle>用瀏覽器登入 OpenRouter</button><button id="connection-check" type="button" data-idle>檢查連線 / 模型</button><button id="key-delete" class="quiet danger-text" type="button" data-idle>移除 Key</button></div>
+          <details class="section-details"><summary>貼上 API key</summary><form id="key-form" autocomplete="off" class="key-form"><label class="sr-only" for="api-key">OpenRouter API key</label><input id="api-key" type="password" autocomplete="new-password" placeholder="貼上一次即可" spellcheck="false" data-idle><button type="submit" data-idle>驗證並儲存</button></form></details>
+          <form id="privacy-form" class="settings-form">
+            <label class="check"><input id="external-ai" type="checkbox" data-idle>啟用外部 AI</label>
+            <label class="check"><input id="privacy-ack" type="checkbox" data-idle>已確認院內政策與資料使用權限，理解去識別內容仍會送往 OpenRouter／上游模型</label>
+            <label class="check"><input id="require-zdr" type="checkbox" checked data-idle>要求 Zero Data Retention endpoint</label>
+            <label class="check"><input id="developer-mode" type="checkbox" data-idle>啟用開發者模式（模型與 prompt）</label>
+            <button type="submit" data-idle>儲存設定</button>
+          </form>
+          <section class="model-section"><div class="section-heading"><div><h2>模型與 Prompt</h2><p class="muted">Fast 用於第一輪整理；複雜問題可選較慢的複核模式。</p></div><button id="developer-open" type="button" data-idle>開啟編輯器</button></div><div id="profile-summary"></div></section>
+          <section id="developer-editor" class="developer-editor" hidden>
+            <div class="button-row"><button id="models-zdr" type="button" data-idle>刷新 ZDR 模型目錄</button><button id="models-all" type="button" class="quiet" data-idle>刷新全部模型</button><span id="catalog-status" class="muted"></span></div>
+            <datalist id="model-catalog"></datalist><div id="developer-profiles" class="table-scroll"></div>
+            <label for="prompt-workflow">背景 Prompt</label><select id="prompt-workflow" data-idle><option value="rounding">查房整理</option><option value="admission">Admission Note</option><option value="emergency">急症處置</option><option value="qa">病人問答</option></select>
+            <label class="sr-only" for="prompt-editor">完整背景 Prompt</label><textarea id="prompt-editor" rows="14" spellcheck="false" data-idle></textarea>
+            <p class="muted">Prompt 會儲存在本機設定；請勿填入病歷、帳密或 API key。Max tokens 留白或 0 使用供應商預設。</p>
+            <div class="button-row"><button id="developer-save" type="button" class="primary" data-idle>儲存模型與 Prompt</button><button id="developer-export" type="button" data-idle>匯出設定</button><button id="developer-import" type="button" data-idle>匯入設定</button><input id="developer-file" type="file" accept="application/json,.json" hidden></div>
+          </section>
+          <p class="footnote">重新整理網頁後，請由 WardLens 控制視窗重新開啟。需要桌面備援時，也可由控制視窗開啟舊介面。</p>
+        </section>
+        <section id="tab-browser" class="tab-panel" hidden>
+          <div class="section-heading"><div><h2>瀏覽器相容性測試</h2><p class="muted">測試 Edge、中文、18 列表格與動態更新，不登入醫院或讀取病歷。</p></div></div>
+          <p>這項測試用於評估後續 Selenium 擷取。現在的瀏覽器介面與病歷擷取不需要 WebDriver。</p>
+          <div class="button-row"><button id="browser-probe" class="primary" type="button" data-idle>執行本機測試</button><button id="browser-prepare" type="button" data-idle>從 Microsoft 準備驅動</button><button id="browser-save" type="button">儲存診斷紀錄</button></div>
+          <p class="muted">準備驅動需要外網，可先在自己的電腦完成再帶完整資料夾到院內。公開套件未內附授權限制重新散布的驅動。</p>
+          <pre id="browser-report" class="diagnostic-report">尚未執行測試。PASS／FAIL 紀錄都可以回傳。</pre>
+        </section>
+      </main>
+    </div>
+  </div>
+  <dialog id="preview-dialog" class="preview-dialog" aria-labelledby="preview-title">
+    <div class="dialog-header"><div><h2 id="preview-title">確認將送出的資料</h2><p id="preview-meta" class="muted"></p></div><button id="preview-close" type="button" class="quiet" aria-label="關閉預覽">×</button></div>
+    <div class="dialog-content">
+      <p id="preview-error" class="inline-error" hidden></p>
+      <p id="preview-help" class="muted">請檢查去識別內容。背景 prompt 與完整 input 可展開核對。</p>
+      <pre id="preview-clinical" class="preview-clinical"></pre>
+      <div id="repair-user-section" hidden><label for="preview-user">修正病人資料 / 問題</label><textarea id="preview-user" rows="14" spellcheck="false"></textarea></div>
+      <details id="preview-system-details"><summary>背景 Prompt</summary><label class="sr-only" for="preview-system">背景 Prompt 原文</label><textarea id="preview-system" rows="8" readonly spellcheck="false"></textarea></details>
+      <details id="preview-full-details"><summary>完整 input 與校驗碼</summary><pre id="preview-full"></pre><p id="preview-hash" class="hash-line"></p></details>
+      <div id="preview-consent" class="consent-box">
+        <label class="check"><input id="confirm-review" type="checkbox">已閱讀並確認本次去識別內容</label>
+        <label id="stale-row" class="check warning" hidden><input id="confirm-stale" type="checkbox"><span id="stale-text"></span></label>
+        <label id="slow-row" class="check warning" hidden><input id="confirm-slow" type="checkbox">已先處理床邊急症並叫支援，確認使用較慢的第二輪複核</label>
+        <label id="zdr-row" class="check warning" hidden><input id="confirm-zdr" type="checkbox">已了解未要求 ZDR，仍確認本次傳送</label>
+      </div>
+    </div>
+    <div class="dialog-footer"><p id="preview-destination" class="muted">確認送出後，內容將經 OpenRouter 與上游模型處理。</p><div class="button-row"><button id="preview-repair" type="button" hidden>重新檢查</button><button id="preview-copy" type="button">複製完整 input</button><button id="preview-send" type="button" class="primary">確認送出</button></div></div>
+  </dialog>
+  <dialog id="copy-dialog" class="copy-dialog" aria-labelledby="copy-title"><h2 id="copy-title">複製文字</h2><p class="muted">瀏覽器未允許自動複製，請選取後按 Ctrl+C。</p><textarea id="copy-text" readonly rows="12"></textarea><button id="copy-close" type="button">關閉並清除</button></dialog>
+</body>
+</html>

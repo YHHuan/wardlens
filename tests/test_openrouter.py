@@ -56,6 +56,20 @@ def test_default_profiles_do_not_send_an_application_output_cap(stream):
     assert explicit["max_tokens"] == 1200
 
 
+def test_cancel_during_metadata_validation_prevents_paid_post(monkeypatch):
+    import threading
+    from unittest.mock import Mock
+
+    stopped = threading.Event()
+    client = OpenRouterClient()
+    monkeypatch.setattr(client, "validate_profile", lambda *args, **kwargs: stopped.set())
+    post = Mock(side_effect=AssertionError("must not send inference"))
+    monkeypatch.setattr(client, "_post_completion", post)
+    with pytest.raises(OpenRouterError, match="沒有送出"):
+        list(client.stream("synthetic-key", PromptEnvelope("system", "user"), _profile(), cancel_event=stopped))
+    assert not post.called
+
+
 class _Response:
     ok = True
     status_code = 200

@@ -1,36 +1,47 @@
-WardLens Portable v0.6.0
+WardLens Portable v0.7.0
 ========================
 
-這是免安裝版本，不需要系統管理員權限，也不會執行 pip 或連網安裝套件。
+免安裝；主介面不用 Node、pip、管理員權限或 WebDriver。
 
+開始使用
 1. 將 WardLens-Portable.zip「全部解壓縮」到本機資料夾。
-2. 不要直接在 ZIP 預覽視窗內執行，也不要只複製單一 BAT 或 EXE。
-3. 雙擊 WardLens.exe。它必須與 runtime、app、packages 資料夾一起保留。
-4. 第一次先使用「合成資料 Demo」確認介面。
-5. 若無法啟動，雙擊 Diagnose-WardLens.bat，再回報 WardLens-Diagnostics.txt。
-6. 若登入後「載入選取病人資料」出現未預期錯誤，回報錯誤碼及視窗列出的
-   operation-error.log（通常在 %LOCALAPPDATA%\WardLens），不需提供病歷或帳密。
-7. 預覽被 possible_long_identifier 擋下時，新版會開啟本機修正視窗。
-   先核對橘色標記、遮罩識別碼，再按「重新檢查並建立預覽」，閱讀後才送出。
-8. 左側預設回溯近 3 個月，可選 1／3／6／12 個月；調整後重新載入。
-   病人總覽會列出實際辨識日期與缺漏。報告明細每次最多 12 份，優先最新；
-   不可把索引或擷取範圍當成完整報告。詳見 docs/AI_AND_TRENDS.md。
-9. 查房／病歷 AI 和急症處置各有可編輯資料框、問題／病況框、回答區。
-   資料框刪改後不會附回原始病歷。送出時才開啟去識別確認，背景 prompt 預設收合。
-10. v0.5.0 修正中文 UTF-8 串流誤判損毀。若仍失敗，回報 WL-SSE-* 錯誤碼即可，
-    不需提供病歷、原始串流或 API key。真正中斷／截短仍會標示內容不完整。
-11. v0.6.0 預設不加程式 token 額度；供應商本身仍有上限。開發者模式留白／填 0
-    使用供應商預設，亦可指定正整數。舊內建額度會遷移，其他手動額度保留。
-12. 本次住院 TPR 生命徵象會連同原表時間帶入；不是即時監視器。缺欄位／日期會明示。
-13. 「瀏覽器測試」可檢查 Edge、中文、18 列表格與動態更新。先執行測試，再儲存
-    WardLens-Browser-Diagnostics.txt 回傳。若缺少驅動，可在自己的連網電腦按
-    「從 Microsoft 準備驅動」，再帶整個資料夾到院內。公開 ZIP 不內附授權限制
-    重新散布的 WebDriver；準備後的資料夾請勿重新公開。詳見 docs/BROWSER_TEST.md。
+2. 雙擊 WardLens.exe；它必須與 runtime、app、packages 一起保留。
+   不要直接在 ZIP 預覽視窗內執行，也不要只複製單一 EXE 或 BAT。
+3. 小控制視窗會開啟本機工作台，Windows 優先使用 Edge InPrivate，
+   不可用時嘗試預設瀏覽器。第一次先使用「合成資料 Demo」登入。
+4. 載入病人後，「查房前整理」會顯示 TODO、報告、用藥與檢驗趨勢。
+   CBC 優先看 WBC／Hb／PLT；differential、詳細時間與來源可以展開。
+5. 查房與急症各有可編輯資料框、問題／病況框與回答區。
+   回答可閱讀 Markdown，也可「複製純文字」。背景 prompt 預設收合。
+6. 在「設定」登入 OpenRouter，或貼上一次 API key 並儲存。
+   Key 存在 Windows 認證管理員。每次送出仍須預覽、修正疑似識別碼及確認。
 
-升級請關閉舊版、另解壓縮新資料夾，確認標題為 0.6.0；既有 key／自訂模型／prompt 保留。
+重開與結束
+- 重新整理網頁後，請從控制視窗按「開啟工作台」。
+- 舊介面可按「切換桌面備援」、執行 Start-WardLens-Desktop.bat，
+  或使用 WardLens.exe --desktop。切換不會搬移病歷草稿。
+- 控制視窗可以最小化；關閉或按「結束」會停止服務並清除本次臨床狀態。
+  只關閉網頁不等於結束程式。也可在網頁按「登出清除」清除病人資料。
+- Start-WardLens.bat 可保留啟動訊息；使用時不要提早關閉命令視窗。
 
-WardLens.exe 直接開啟介面；如果需要命令視窗看啟動訊息，可改用 Start-WardLens.bat，
-此時 WardLens 開啟期間不要關閉命令視窗。診斷不包含病歷、帳密、key 或絕對使用者路徑。
-WardLens.exe 是專案原始碼編譯的未簽章啟動器；官方 Python runtime 保有 PSF 簽章。
+升級與資料
+- 關閉舊版、另解壓縮新資料夾，確認版本為 0.7.0。
+  既有 key／自訂模型／prompt 保留；新版內建 prompt 不會覆蓋自訂內容。
+- 回溯預設 3 個月，可選 1／3／6／12；更改後重新載入。
+  報告明細最多 12 份，優先最新；這不保證取得完整三個月資料。
+- 生命徵象是本次住院 TPR 快照，不是即時監視器。缺時間／欄位會明示。
+- 程式不設預設輸出 token 額度；供應商仍有上限。中斷或截短會標示不完整。
+- 靜態網頁資源隨包附上，無 CDN；臨床資料不寫入網頁儲存空間。
+  no-store／InPrivate 不保證瀏覽器、剪貼簿或作業系統絕不留痕。
 
-技術與安全邊界請閱讀 README.md、SECURITY.md 與 docs 資料夾。
+遇到問題
+- 無法啟動時，雙擊 Diagnose-WardLens.bat，回報 WardLens-Diagnostics.txt。
+- 載入或 AI 失敗時，回報版本、操作與錯誤碼；不要傳病歷、原始回應或 key。
+  診斷不包含病歷、帳密、key 或絕對使用者路徑。
+- 「瀏覽器測試」是獨立的 WebDriver 前置測試；日常操作不需要它。
+  若測試缺驅動，可在自己的連網電腦按「從 Microsoft 準備驅動」，
+  再帶完整資料夾到自己的院內電腦。公開 ZIP 不附限制重新散布的驅動；
+  準備過的個人資料夾請勿重新公開。PASS 不等於 EMR 已改用 Selenium。
+
+WardLens.exe 是未簽章的專案啟動器；官方 Python runtime 保有 PSF 簽章。
+更多操作見 docs/LOCAL_UI.md、docs/AI_AND_TRENDS.md 與 docs/BROWSER_TEST.md。

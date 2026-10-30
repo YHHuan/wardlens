@@ -49,6 +49,10 @@ _TIME_LABELS = {_key(item) for item in ("Time", "時間", "時分")}
 _NAME_LABELS = {_key(item) for item in ("Test", "Item", "項目", "檢驗項目", "檢驗名稱")}
 _VALUE_LABELS = {_key(item) for item in ("Value", "Result", "結果", "數值", "檢驗值", "檢驗結果")}
 _UNIT_LABELS = {_key(item) for item in ("Unit", "Units", "單位")}
+_UNKNOWN_DATE_LABELS = {_key(item) for item in (
+    "unknown", "unknown date", "unknown time", "undated", "date unknown", "time unknown",
+    "日期不明", "時間不明", "日期未明", "時間未明", "日期未知", "時間未知", "未記載日期", "未記載時間",
+)}
 _IGNORE_LABELS = _DATE_LABELS | _TIME_LABELS | _NAME_LABELS | _UNIT_LABELS | {
     _key(item) for item in ("Reference", "Reference range", "參考值", "參考範圍", "Code", "代碼", "檢體", "Specimen", "狀態", "Status", "備註")
 }
@@ -150,21 +154,32 @@ def _date_rows(rows: list[list[str]], source_id: str) -> tuple[list[dict], list[
 
 def _date_columns(rows: list[list[str]], source_id: str) -> tuple[list[dict], list[str]]:
     for header_index, header in enumerate(rows[:12]):
-        dates = {index: cell for index, cell in enumerate(header) if _parse_time(cell)}
-        if not dates:
+        known_dates = {index: cell for index, cell in enumerate(header) if _parse_time(cell)}
+        unknown_dates = {index: cell for index, cell in enumerate(header) if _key(cell) in _UNKNOWN_DATE_LABELS}
+        named_column = next((i for i, cell in enumerate(header) if _key(cell) in _NAME_LABELS), None)
+        if not known_dates and not (unknown_dates and named_column is not None):
             continue
-        name_column = next((i for i, cell in enumerate(header) if _key(cell) in _NAME_LABELS), 0)
+        dates = {**known_dates, **unknown_dates}
+        name_column = named_column if named_column is not None else 0
         if name_column in dates:
             continue
         unit_column = next((i for i, cell in enumerate(header) if _key(cell) in _UNIT_LABELS), None)
+        warnings: list[str] = []
+        if unknown_dates:
+            warnings.append("有日期／時間未明的檢驗欄，數值另列為時間未明；請展開原文核對。")
+        unparsed = [cell or "（空白）" for index, cell in enumerate(header)
+                    if index not in dates and index != name_column and _key(cell) not in _IGNORE_LABELS]
+        if unparsed:
+            labels = "、".join(label[:60] for label in unparsed[:4])
+            warnings.append(f"有欄位標頭無法判定為日期或已知附註欄（{labels}），未推測其數值與日期；請展開原文核對未呈現欄位。")
         data_index = header_index + 1
         if data_index < len(rows) and len(rows[data_index]) == len(header):
             clock_row = rows[data_index]
-            if all(_CLOCK.fullmatch(clock_row[index]) for index in dates):
-                dates = {index: time + " " + clock_row[index] for index, time in dates.items()}
+            if known_dates and all(_CLOCK.fullmatch(clock_row[index]) for index in known_dates):
+                dates = {index: time + (" " + clock_row[index] if _CLOCK.fullmatch(clock_row[index]) else "")
+                         for index, time in dates.items()}
                 data_index += 1
         points: list[dict] = []
-        warnings: list[str] = []
         for row in rows[data_index:]:
             if len(row) != len(header):
                 warnings.append("有檢驗列欄數不符，未推測欄位對應；請展開原文。")
@@ -210,6 +225,19 @@ def _series(points: list[dict]) -> list[dict]:
             if item["timestamp"]:
                 collisions[item["timestamp"]].add(item["value"])
         conflict = any(len(values) > 1 for values in collisions.values())
+        by_day: dict = defaultdict(list)
+        for item in known:
+            day = datetime.fromisoformat(item["timestamp"]).astimezone(EMR_TIMEZONE).date()
+            by_day[day].append(item)
+        mixed_precision_days = {
+            day for day, observations in by_day.items()
+            if any(item["time_precision"] == "day" for item in observations)
+            and any(item["time_precision"] != "day" for item in observations)
+        }
+        ambiguous_latest_days = {
+            day for day in mixed_precision_days if len({item["value"] for item in by_day[day]}) > 1
+        }
+        has_time_conflict = conflict or bool(mixed_precision_days)
         notes = [f"已知時間 {len(known)} 筆／未知時間 {len(unknown)} 筆"]
         if not unit:
             notes.append("單位未提供")
@@ -219,6 +247,8 @@ def _series(points: list[dict]) -> list[dict]:
             notes.append("含缺值、比較符或非純數值，保留原文")
         if conflict:
             notes.append("相同日期／時間標記有不同數值，請核對量測時間與來源")
+        if mixed_precision_days:
+            notes.append("同日部分紀錄僅有日期，無法確定先後；僅依日期分組，不以午夜推定量測時間")
         if len(items) == 1:
             notes.append("僅一筆，不能判斷趨勢")
         if len(known) > 5:
@@ -226,20 +256,25 @@ def _series(points: list[dict]) -> list[dict]:
         values = [{key: item[key] for key in ("value", "time", "source_id", "timestamp", "time_precision", "numeric")} for item in items]
         known_values, unknown_values = values[:len(known)], values[len(known):]
         latest = known_values[-1] if known_values else None
-        if latest and len(collisions[latest["timestamp"]]) > 1:
+        latest_day = datetime.fromisoformat(latest["timestamp"]).astimezone(EMR_TIMEZONE).date() if latest else None
+        if latest and (len(collisions[latest["timestamp"]]) > 1 or latest_day in ambiguous_latest_days):
             # A tied timestamp with conflicting results cannot identify one
             # current value. Keep both original results in the source details.
             latest = None
         span = _span(known)
+        if mixed_precision_days:
+            days = (max(by_day) - min(by_day)).days
+            span = f"跨 {days} 天（依日期，實際間隔未明）" if days else "同日，先後未明"
         if known and unknown:
             span += "（依已知時間計）"
         output.append({
             "label": label, "unit": unit, "group": items[0]["group"],
             "values": known_values[-5:], "all_values": values, "point_count": len(values),
             "latest_known": latest, "unknown_values": unknown_values,
-            "chronology_complete": not unknown and not conflict,
+            "chronology_complete": not unknown and not has_time_conflict,
+            "has_time_conflict": has_time_conflict,
             "span": span, "note": "；".join(notes),
-            "chartable": bool(unit and not unknown and numeric and len(items) > 1 and not conflict),
+            "chartable": bool(unit and not unknown and numeric and len(items) > 1 and not has_time_conflict),
             "_order": items[0]["order"],
         })
     output.sort(key=lambda item: (item["_order"], item["label"], item["unit"]))
@@ -253,8 +288,10 @@ def build_rounding_view(bundle: PatientBundle) -> dict:
 
     `values` holds up to five recent points with known times; `unknown_values`
     keeps observations that cannot be ordered and `all_values` retains both.
-    `latest_known` is null if no time is known or the latest timestamp conflicts.
-    `chronology_complete` excludes unknown times and conflicting timestamps.
+    `latest_known` is null if no time is known or the latest value is ambiguous.
+    `has_time_conflict` covers tied values and same-day mixed date/time precision;
+    do not imply an order with arrows in these rows. `chronology_complete` also
+    excludes unknown times.
     Plot only when `chartable` is true, using `timestamp`, not equal gaps.
     Show original `time` in labels; day-only timestamps are coordinates, not an
     assertion that sampling occurred at midnight (`time_precision` records this).

@@ -127,6 +127,37 @@ def test_transposed_table_preserves_merged_date_clock_headers():
     assert [point["time"] for point in row["values"]] == ["2026/10/29 06:00", "2026/10/29 18:00", "2026/10/30 09:00"]
 
 
+def test_transposed_unknown_dates_preserve_values_but_metadata_is_not_an_observation():
+    text = "Test\tUnit\t2026-10-30\tunknown\tReference range\tStatus\nCRP\tmg/dL\t1.0\t9.9\t0-0.5\tfinal"
+    view = build_rounding_view(bundle_of(text))
+    row = view["trends"][0]
+    assert [point["value"] for point in row["values"]] == ["1.0"]
+    assert [point["value"] for point in row["unknown_values"]] == ["9.9"]
+    assert row["point_count"] == 2 and not row["chronology_complete"]
+    assert not row["chartable"]
+    assert any("時間未明" in warning for warning in view["warnings"])
+    assert view["sources"][0]["content"] == text
+
+
+def test_transposed_all_unknown_dates_remain_visible_without_a_latest_value():
+    view = build_rounding_view(bundle_of("Test\tUnit\t時間不明\nCRP\tmg/dL\t9.9"))
+    row = view["trends"][0]
+    assert not row["values"] and row["latest_known"] is None
+    assert row["unknown_values"][0]["value"] == "9.9"
+    assert not row["chronology_complete"]
+
+
+def test_transposed_unrecognized_columns_warn_and_keep_original_without_guessing():
+    text = "Test\tUnit\t2026-10-30\tunrecognized heading\tStatus\nCRP\tmg/dL\t1.0\t9.9\tfinal"
+    view = build_rounding_view(bundle_of(text))
+    row = view["trends"][0]
+    assert row["point_count"] == 1
+    assert not row["unknown_values"]
+    assert any("unrecognized heading" in warning and "未推測" in warning for warning in view["warnings"])
+    assert not any("Status" in warning for warning in view["warnings"])
+    assert view["sources"][0]["content"] == text
+
+
 def test_invalid_table_alignment_falls_back_to_original_with_warning():
     text = "Date\tWBC\tHb\n2026-10-30\t8.2"
     view = build_rounding_view(bundle_of(text, "lab_cbc"))
@@ -174,6 +205,35 @@ def test_same_timestamp_conflict_is_visible_not_arbitrarily_deduplicated():
     assert row["point_count"] == 2 and not row["chartable"]
     assert "不同數值" in row["note"] and "核對量測時間" in row["note"]
     assert row["latest_known"] is None and not row["chronology_complete"]
+    assert row["has_time_conflict"]
+
+
+def test_same_day_date_only_and_precise_time_cannot_claim_order_or_latest_value():
+    row = build_rounding_view(bundle_of(
+        "Date\tHGB (g/dL)\n2026-10-30\t8.0\n2026-10-30 08:00\t10.0", "lab_cbc",
+    ))["trends"][0]
+    assert row["latest_known"] is None
+    assert row["has_time_conflict"] and not row["chronology_complete"] and not row["chartable"]
+    assert "同日部分紀錄僅有日期，無法確定先後" in row["note"]
+    assert row["span"] == "同日，先後未明"
+    assert [point["time"] for point in row["all_values"]] == ["2026-10-30", "2026-10-30 08:00"]
+
+
+def test_earlier_mixed_precision_conflict_does_not_hide_later_unambiguous_value():
+    row = build_rounding_view(bundle_of(
+        "Date\tHGB (g/dL)\n2026-10-29\t8.0\n2026-10-29 08:00\t10.0\n2026-10-30 08:00\t9.0", "lab_cbc",
+    ))["trends"][0]
+    assert row["latest_known"]["value"] == "9.0"
+    assert row["has_time_conflict"] and not row["chartable"]
+    assert "實際間隔未明" in row["span"]
+
+
+def test_date_only_and_precise_time_on_different_days_have_known_order():
+    row = build_rounding_view(bundle_of(
+        "Date\tHGB (g/dL)\n2026-10-29\t8.0\n2026-10-30 08:00\t10.0", "lab_cbc",
+    ))["trends"][0]
+    assert row["latest_known"]["value"] == "10.0"
+    assert not row["has_time_conflict"] and row["chronology_complete"] and row["chartable"]
 
 
 def test_vitals_keep_original_times_and_do_not_invent_missing_fields():

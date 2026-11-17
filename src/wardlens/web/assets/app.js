@@ -75,9 +75,12 @@
     const count = key => Number.isSafeInteger(coverage[key]) && coverage[key] >= 0 ? coverage[key] : null;
     const loaded = count("report_loaded"), found = count("report_candidates"), messages = [];
     if (loaded !== null) messages.push("已讀取 " + loaded + " 份報告" + (found === null ? "" : " / 發現 " + found + " 份"));
-    if (count("lab_categories_loaded") !== null) messages.push("已讀取 " + count("lab_categories_loaded") + " 類檢驗");
+    const labLoaded = count("lab_categories_loaded"), labDiscovered = count("lab_categories_discovered");
+    if (labLoaded !== null) messages.push("已讀取 " + labLoaded + (labDiscovered === null ? "" : " / " + labDiscovered) + " 類檢驗");
+    else if (labDiscovered !== null) messages.push("已發現 " + labDiscovered + " 類檢驗");
+    if (coverage.lab_categories_complete === false) messages.push("檢驗類別尚未讀取完整");
     for (const [key, label] of [["report_failed", "讀取失敗"], ["report_skipped", "未讀取"]]) if (count(key) > 0) messages.push(label + " " + count(key) + " 份");
-    const warning = coverage.cancelled === true || count("report_failed") > 0 || count("report_skipped") > 0 || coverage.report_discovery_complete === false || coverage.report_details_complete === false;
+    const warning = coverage.cancelled === true || count("report_failed") > 0 || count("report_skipped") > 0 || coverage.report_discovery_complete === false || coverage.report_details_complete === false || coverage.lab_categories_complete === false;
     const complete = !warning && coverage.report_discovery_complete === true && coverage.report_details_complete === true;
     return {title: coverage.cancelled ? "已停止載入 · 保留已讀取資料" : complete ? "本次報告擷取完成" : "本次資料涵蓋", text: messages.join(" · "), warning};
   }

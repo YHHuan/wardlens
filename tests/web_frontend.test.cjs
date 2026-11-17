@@ -216,6 +216,12 @@ test("coverage never equates missing counters or cancelled partial results with 
   assert.doesNotMatch(incomplete.title, /完成/);
   assert.doesNotMatch(ui.coveragePresentation({report_discovery_complete: true, report_details_complete: true, report_failed: 1}).title, /完成/);
   assert.match(ui.coveragePresentation({report_discovery_complete: true, report_details_complete: true}).title, /完成/);
+  const incompleteLabs = ui.coveragePresentation({report_discovery_complete: true, report_details_complete: true, lab_categories_loaded: 3, lab_categories_discovered: 4, lab_categories_complete: false});
+  assert.equal(incompleteLabs.warning, true);
+  assert.match(incompleteLabs.text, /3 \/ 4 類檢驗.*尚未讀取完整/);
+  assert.doesNotMatch(incompleteLabs.title, /完成/);
+  assert.match(ui.coveragePresentation({lab_categories_discovered: 4}).text, /已發現 4 類檢驗/);
+  assert.doesNotMatch(ui.coveragePresentation({lab_categories_discovered: 4}).text, /已讀取|0/);
 });
 
 test("privacy summaries distinguish processed draft, residual findings and edited text", () => {

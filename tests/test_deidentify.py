@@ -174,3 +174,40 @@ def test_clinical_fractions_stay_clinical_dates_are_relative_and_repeat_is_stabl
     again = scanner.deidentify(first.text, anchor_time=anchor)
     assert again.text == first.text and again.safe_to_send
     assert not again.replacements
+
+
+@pytest.mark.parametrize(("ward", "bed"), [("", "01"), ("01", ""), ("101", ""), ("101", "01"), ("01", "02"), ("ICU", "")])
+def test_short_or_numeric_locations_do_not_corrupt_clinical_values(ward, bed) -> None:
+    patient = PatientSummary(histno="", ward=ward, bed=bed)
+    scanner = Deidentifier()
+    clinical = "Cr 1.01 mg/dL\nDose: 0.01 mg\nPulse 101 bpm\nTransfer to ICU if needed."
+    # An already-redacted input must also pass the residual scan unchanged.
+    assert not scanner.scan(clinical, patient=patient)
+    result = scanner.deidentify(
+        f"病房：{ward or '未提供'}\n床號：{bed or '未提供'}\n"
+        f"Ward: {ward or 'not supplied'}\nBed: {bed or 'not supplied'}\n"
+        "Collection date: 2026-01-10\nEvent: 2026-01-02\nHistorical: 101-01-02\n"
+        + clinical,
+        patient=patient,
+        anchor_time=datetime.fromisoformat("2026-01-10T12:00:00+08:00"),
+    )
+    assert result.safe_to_send
+    assert clinical in result.text
+    assert "Collection date: D0" in result.text
+    assert "Event: D-8" in result.text
+    assert "Historical: D-5122" in result.text
+    assert "病房" not in result.text and "床號" not in result.text
+    assert "Ward:" not in result.text and "Bed:" not in result.text
+    assert "KNOWN_LOCATION" not in result.text
+    assert not scanner.scan(result.text, patient=patient)
+
+
+def test_specific_known_location_is_still_redacted_without_a_field_label() -> None:
+    patient = PatientSummary(histno="", ward="D101", bed="01")
+    scanner = Deidentifier()
+    assert scanner.scan("Location mentioned as D101-01", patient=patient)
+    result = scanner.deidentify("Location mentioned as D101-01; Cr 1.01 mg/dL", patient=patient)
+    assert result.safe_to_send
+    assert "D101-01" not in result.text
+    assert "[KNOWN_LOCATION_REMOVED]" in result.text
+    assert "Cr 1.01 mg/dL" in result.text

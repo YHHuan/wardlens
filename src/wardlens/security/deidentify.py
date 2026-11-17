@@ -123,15 +123,9 @@ class Deidentifier:
         anchor = anchor_time or datetime.now().astimezone()
 
         if patient is not None:
-            term_kinds = (
-                (patient.histno, "known_histno"),
-                (patient.case_no, "known_case_no"),
-                (patient.name, "known_name"),
-                (patient.location, "known_location"),
-            )
+            term_kinds = self._known_patient_terms(patient)
             for value, kind in sorted(term_kinds, key=lambda item: len(item[0]), reverse=True):
-                value = value.strip()
-                if len(value) < 2 or value not in output:
+                if value not in output:
                     continue
                 output = output.replace(value, f"[{kind.upper()}_REMOVED]")
                 replacements.append(Finding(kind, _masked(value)))
@@ -207,12 +201,36 @@ class Deidentifier:
             findings.append(Finding(span.kind, "[labelled identifier]", span.start, span.end))
 
         if patient is not None:
-            for value in patient.redaction_terms():
+            for value, _ in self._known_patient_terms(patient):
                 for match in re.finditer(re.escape(value), scannable):
                     findings.append(
                         Finding("known_patient_identifier", _masked(value), *match.span())
                     )
         return findings
+
+    @staticmethod
+    def _known_patient_terms(patient: PatientSummary) -> tuple[tuple[str, str], ...]:
+        """Only specific locations can be safely replaced without a field label.
+
+        A numeric bed/ward such as 01, 101 or 101-01 also occurs inside doses,
+        laboratory values and calendar dates. A short text location such as ICU
+        may be clinical content. Their labelled fields are still removed by the
+        header cleaner; the literal residual scan must use the same restriction.
+        """
+        terms: list[tuple[str, str]] = []
+        for raw, kind in (
+            (patient.histno, "known_histno"),
+            (patient.case_no, "known_case_no"),
+            (patient.name, "known_name"),
+            (patient.location, "known_location"),
+        ):
+            value = raw.strip()
+            if len(value) < 2:
+                continue
+            if kind == "known_location" and (len(value) < 4 or not any(character.isalpha() for character in value)):
+                continue
+            terms.append((value, kind))
+        return tuple(terms)
 
     @staticmethod
     def mask_findings(text: str, findings: list[Finding] | tuple[Finding, ...]) -> str:

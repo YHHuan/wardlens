@@ -25,6 +25,10 @@ class RequestBudgetExceeded(EMRError):
     pass
 
 
+class EMRCancelled(EMRError):
+    """User stopped a read-only fetch; partial records may remain available."""
+
+
 class EMRAdapter(Protocol):
     @property
     def logged_in(self) -> bool: ...

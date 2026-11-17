@@ -52,8 +52,9 @@
       <main class="main">
         <div class="patient-heading">
           <div><p class="eyebrow">目前病人</p><h1 id="selected-patient">選取病人，開始整理</h1><p id="snapshot" class="muted">只在選取後載入資料</p></div>
-          <div class="load-controls"><label>回溯<select id="lookback" data-idle><option value="1">1 個月</option><option value="3" selected>3 個月</option><option value="6">6 個月</option><option value="12">12 個月</option></select></label><button id="load-patient" class="primary" type="button" data-idle>載入 / 更新資料</button></div>
+          <div class="load-controls"><label>回溯<select id="lookback" data-idle><option value="1">1 個月</option><option value="3">3 個月</option><option value="6">6 個月</option><option value="12" selected>1 年</option></select></label><button id="load-patient" class="primary" type="button" data-idle>載入 / 更新資料</button><button id="cancel-load" class="quiet danger-text" type="button" hidden>停止載入</button></div>
         </div>
+        <p id="load-progress" class="load-progress" role="status" hidden></p>
         <div id="notice" class="notice" role="alert" hidden><span id="notice-text"></span><button id="dismiss-notice" type="button" class="quiet" aria-label="關閉提示">×</button></div>
         <nav class="tabs" aria-label="工作區">
           <button type="button" data-tab="rounding" class="active" aria-current="page">查房前整理</button>
@@ -105,6 +106,7 @@
     <div class="dialog-header"><div><h2 id="preview-title">確認將送出的資料</h2><p id="preview-meta" class="muted"></p></div><button id="preview-close" type="button" class="quiet" aria-label="關閉預覽">×</button></div>
     <div class="dialog-content">
       <p id="preview-error" class="inline-error" hidden></p>
+      <p id="preview-privacy" class="privacy-status" role="status"></p>
       <p id="preview-help" class="muted">請檢查去識別內容。背景 prompt 與完整 input 可展開核對。</p>
       <pre id="preview-clinical" class="preview-clinical"></pre>
       <div id="repair-user-section" hidden><label for="preview-user">修正病人資料 / 問題</label><textarea id="preview-user" rows="14" spellcheck="false"></textarea></div>

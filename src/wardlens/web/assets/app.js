@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  // Pure helpers are exported for development tests; clinical state stays private.
+  // Testable helpers are exported for development; clinical state stays private.
   function nextRevision(local, remote) { return Math.max(Number(local) || 0, Number(remote) || 0) + 1; }
   function shouldAdoptDraft(remote, local, dirty, force) { return Boolean(force || (!dirty && Number(remote) > Number(local))); }
   function shouldRenderAnswer(remote, local, dirty) { return !dirty && Number.isSafeInteger(remote) && remote === local; }
@@ -21,7 +21,15 @@
   }
   function validPlotPoints(row) {
     if (!row || row.chartable !== true || row.has_time_conflict === true) return [];
-    const points = (row.values || []).map(point => ({x: Date.parse(point.timestamp || ""), y: point.numeric}));
+    const observations = row.all_values || row.values || [];
+    // The overview keeps only a few recent values; the chart must retain the full window.
+    // Never combine unlike specimens/units or turn a comparator into an exact value.
+    for (const field of ["unit", "specimen", "method", "time_basis"]) {
+      const identities = new Set(observations.map(point => String(point[field] || row[field] || "").trim()));
+      if (identities.size > 1) return [];
+    }
+    if (observations.some(point => point.value != null && !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(String(point.value).trim()))) return [];
+    const points = observations.map(point => ({x: Date.parse(point.timestamp || ""), y: point.numeric, observation: point})).sort((a, b) => a.x - b.x);
     if (points.length < 2 || points.some(point => !Number.isFinite(point.x) || typeof point.y !== "number" || !Number.isFinite(point.y))) return [];
     if (points.some((point, index) => index && point.x <= points[index - 1].x)) return [];
     return points;
@@ -50,7 +58,53 @@
     const lastKnownTime = allKnown.length ? allKnown[allKnown.length - 1].time || "" : "";
     return {known, unknown, latest, separators, hasConflicts, hasTimeConflict, latestConflict, lastKnownTime};
   }
-  if (typeof module === "object" && module.exports) module.exports = {nextRevision, shouldAdoptDraft, shouldRenderAnswer, buildDeveloperConfig, validPlotPoints, trendPresentation};
+  function sortedTrendRows(rows, query) {
+    const tokens = String(query || "").trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+    const priority = row => ({wbc: 0, hb: 1, hgb: 1, hemoglobin: 1, plt: 2, platelet: 2, platelets: 2}[String(row.label).toLowerCase()] ?? 3);
+    return (rows || []).filter(row => tokens.every(token => [row.label, row.unit, row.specimen, row.method, row.reference].filter(Boolean).join(" ").toLocaleLowerCase().includes(token)))
+      .map((row, index) => ({row, index})).sort((a, b) => priority(a.row) - priority(b.row) || a.index - b.index).map(item => item.row);
+  }
+  function privacyPresentation(privacy) {
+    if (!privacy || (!privacy.automatic && !privacy.checked)) return {text: "目前內容尚未重新檢查；預覽前會自動去識別化", warning: true};
+    const count = Number.isSafeInteger(privacy.replacement_count) && privacy.replacement_count >= 0 ? privacy.replacement_count : null;
+    const residual = Number.isSafeInteger(privacy.residual_count) && privacy.residual_count >= 0 ? privacy.residual_count : null;
+    return {text: (count === null ? "自動去識別已檢查" : "自動去識別已處理 " + count + " 項") + (residual > 0 ? "；疑似剩餘 " + residual + " 項需檢查" : "；送出前仍可預覽核對"), warning: residual > 0};
+  }
+  function coveragePresentation(coverage) {
+    if (!coverage || !Object.keys(coverage).length) return null;
+    const count = key => Number.isSafeInteger(coverage[key]) && coverage[key] >= 0 ? coverage[key] : null;
+    const loaded = count("report_loaded"), found = count("report_candidates"), messages = [];
+    if (loaded !== null) messages.push("已讀取 " + loaded + " 份報告" + (found === null ? "" : " / 發現 " + found + " 份"));
+    if (count("lab_categories_loaded") !== null) messages.push("已讀取 " + count("lab_categories_loaded") + " 類檢驗");
+    for (const [key, label] of [["report_failed", "讀取失敗"], ["report_skipped", "未讀取"]]) if (count(key) > 0) messages.push(label + " " + count(key) + " 份");
+    const warning = coverage.cancelled === true || count("report_failed") > 0 || count("report_skipped") > 0 || coverage.report_discovery_complete === false || coverage.report_details_complete === false;
+    const complete = !warning && coverage.report_discovery_complete === true && coverage.report_details_complete === true;
+    return {title: coverage.cancelled ? "已停止載入 · 保留已讀取資料" : complete ? "本次報告擷取完成" : "本次資料涵蓋", text: messages.join(" · "), warning};
+  }
+  function renderSections(target, sections, renderText) {
+    const doc = target.ownerDocument;
+    const create = (tag, text) => { const node = doc.createElement(tag); if (text != null) node.textContent = String(text); return node; };
+    for (const section of sections || []) {
+      if (section.kind === "table") {
+        const rows = Array.isArray(section.rows) ? section.rows.filter(Array.isArray) : [], headers = Array.isArray(section.headers) ? section.headers : [];
+        const width = rows.reduce((maximum, row) => Math.max(maximum, row.length), headers.length);
+        if (!width) continue;
+        const wrapper = create("div"), table = create("table"), head = create("thead"), header = create("tr"), body = create("tbody");
+        wrapper.className = "table-scroll report-table";
+        if (section.caption) table.appendChild(create("caption", section.caption));
+        for (let i = 0; i < width; i++) { const cell = create("th", headers[i] || "欄 " + (i + 1) + "（原文未命名）"); cell.scope = "col"; header.appendChild(cell); }
+        head.appendChild(header); table.appendChild(head);
+        for (const row of rows) { const tr = create("tr"); for (let i = 0; i < width; i++) tr.appendChild(create("td", row[i] == null ? "" : row[i])); body.appendChild(tr); }
+        table.appendChild(body); wrapper.appendChild(table); target.appendChild(wrapper);
+      } else if (section.kind === "text" && section.text) {
+        const text = create("div"); text.className = "report-text markdown";
+        if (renderText) renderText(text, String(section.text));
+        else { const paragraph = create("p", section.text); text.appendChild(paragraph); }
+        target.appendChild(text);
+      }
+    }
+  }
+  if (typeof module === "object" && module.exports) module.exports = {nextRevision, shouldAdoptDraft, shouldRenderAnswer, buildDeveloperConfig, validPlotPoints, trendPresentation, sortedTrendRows, privacyPresentation, coveragePresentation, renderSections};
   if (typeof document === "undefined") return;
 
   const $ = id => document.getElementById(id);
@@ -63,7 +117,7 @@
   let preview = null, previewWorkspace = "", previewMode = "send", browserReport = null;
   let developer = null, promptSelection = "rounding", developerDirty = false;
   let clipboardValue = null, clipboardTimer = null;
-  const knownJobs = new Set(), adoptAfterJobs = new Set();
+  const knownJobs = new Set(), adoptAfterJobs = new Set(), transformedDrafts = new Map(), sourceCache = new Map();
   const workspaces = {};
   const workflowLabels = {rounding: "查房整理", admission: "Admission Note", qa: "自由提問", emergency: "急症處置"};
   const answerLabels = {idle: "尚未生成", running: "生成中 · 目前內容仍可能不完整", complete: "生成完成 · AI 草稿請核對", incomplete: "生成中斷 · 內容不完整", cancelled: "已停止 · 內容不完整"};
@@ -126,7 +180,7 @@
   function closePreview() {
     preview = null; previewWorkspace = "";
     if ($("preview-dialog").open) $("preview-dialog").close();
-    for (const id of ["preview-clinical", "preview-full", "preview-hash", "preview-meta", "preview-error"]) setText(id, "");
+    for (const id of ["preview-clinical", "preview-full", "preview-hash", "preview-meta", "preview-privacy", "preview-error"]) setText(id, "");
     $("preview-system").value = ""; $("preview-user").value = "";
   }
   function clearWorkspaceLocal(key) {
@@ -138,6 +192,8 @@
     workspace.answer.replaceChildren(); workspace.raw.textContent = "";
     workspace.answerStatus.textContent = "尚未生成";
     workspace.draftStatus.textContent = "";
+    workspace.privacyStatus.textContent = "載入後會自動去識別化 AI 資料";
+    workspace.privacyStatus.className = "privacy-status";
   }
   function disconnect(title, message) {
     alive = false; token = ""; clearTimeout(pollTimer); closePreview();
@@ -147,7 +203,7 @@
     $("profile-summary").replaceChildren(); $("model-catalog").replaceChildren();
     setText("selected-patient", "資料已清除"); setText("snapshot", ""); setText("notice-text", ""); setText("status", ""); setText("list-status", "");
     renderedPatients = ""; renderedOverview = ""; renderedProfiles = "";
-    state = null; developer = null; browserReport = null; knownJobs.clear(); adoptAfterJobs.clear();
+    state = null; developer = null; browserReport = null; knownJobs.clear(); adoptAfterJobs.clear(); transformedDrafts.clear(); sourceCache.clear();
     $("copy-text").value = ""; if ($("copy-dialog").open) $("copy-dialog").close();
     $("app-shell").hidden = true; $("connection-screen").hidden = false;
     setText("connection-title", title || "重新開啟 WardLens"); setText("connection-message", message || "請從 WardLens 控制視窗按「開啟工作台」。");
@@ -170,6 +226,11 @@
       workspace.cancel.disabled = !alive || !state || !state.busy || !Object.values(state.answers || {}).some(answer => answer.status === "running");
       workspace.copyAnswer.disabled = !workspace.answerText;
     }
+    const loading = Boolean(state && state.busy && state.job && state.job.kind === "load");
+    $("cancel-load").hidden = !loading;
+    $("cancel-load").disabled = !alive || requestBusy || !loading;
+    $("load-progress").hidden = !loading;
+    setText("load-progress", loading ? state.status || "正在讀取檢驗與報告…" : "");
     $("browser-save").disabled = !browserReport;
     updatePreviewControls();
   }
@@ -190,6 +251,8 @@
     const workspace = workspaces[key];
     workspace.revision = nextRevision(workspace.revision, state.drafts[key].revision);
     workspace.dirty = true; workspace.modified = true;
+    workspace.privacyStatus.textContent = privacyPresentation(null).text;
+    workspace.privacyStatus.className = "privacy-status warning";
     workspace.draftStatus.textContent = "正在更新草稿…";
     workspace.answerStatus.textContent = "輸入已更動，尚未生成";
     workspace.answerStatus.className = "answer-status idle";
@@ -237,6 +300,10 @@
       data.value = ""; markDraft(key);
     }, "quiet")));
     context.append(contextSummary, data, contextActions); section.append(context);
+    const privacyRow = element("div", null, "privacy-row"), privacyStatus = element("p", "載入後會自動去識別化 AI 資料", "privacy-status");
+    privacyStatus.id = key + "-privacy"; privacyStatus.setAttribute("role", "status");
+    const deidentify = idle(button("重新去識別化", key + "-deidentify", () => handleDeidentify(key), "quiet"));
+    privacyRow.append(privacyStatus, deidentify); section.append(privacyRow);
     const questionLabel = element("label", emergency ? "病況 / 已做處置 / 想確認的問題" : "問題或特別想追蹤的事", "question-label"); questionLabel.htmlFor = key + "-question";
     const question = idle(element("textarea", null, "question-box")); question.id = key + "-question"; question.rows = emergency ? 4 : 3;
     question.placeholder = emergency ? "例如：突然喘、目前生命徵象、氧氣裝置、已做處置與反應…" : "留白可整理今日查房重點；或輸入想確認的趨勢、報告、待辦…";
@@ -257,7 +324,7 @@
     const rawDetails = element("details", null, "answer-raw"), raw = element("pre"); rawDetails.append(element("summary", "Markdown 原文"), raw);
     answerSection.append(answerHeading, answerStatus, answer, rawDetails); section.append(answerSection);
     $(key + "-workspace").append(section);
-    workspaces[key] = {data, question, workflow, profile, cancel, copyAnswer, citations, answer, raw, answerStatus, draftStatus, revision: 0, syncedRevision: -1, dirty: false, modified: false, timer: null, pending: Promise.resolve(), answerText: "", answerSignature: ""};
+    workspaces[key] = {data, question, workflow, profile, cancel, copyAnswer, citations, answer, raw, answerStatus, draftStatus, privacyStatus, revision: 0, syncedRevision: -1, dirty: false, modified: false, timer: null, pending: Promise.resolve(), answerText: "", answerSignature: ""};
     for (const field of [data, question]) field.addEventListener("input", () => markDraft(key));
     for (const field of [workflow, profile].filter(Boolean)) field.addEventListener("change", () => markDraft(key));
     citations.addEventListener("change", () => { workspaces[key].answerSignature = ""; if (state) renderAnswer(key, state.answers[key], state.drafts[key].revision); });
@@ -300,53 +367,193 @@
     }
     return section;
   }
-  function sparkline(row) {
+  function trendChart(row) {
     const points = validPlotPoints(row);
     if (!points.length) return null;
-    const xmin = points[0].x, xmax = points[points.length - 1].x;
-    const ys = points.map(point => point.y), ymin = Math.min(...ys), ymax = Math.max(...ys);
-    const plot = points.map(point => [4 + (point.x - xmin) / (xmax - xmin) * 102, ymax === ymin ? 13 : 23 - (point.y - ymin) / (ymax - ymin) * 20]);
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"); svg.setAttribute("viewBox", "0 0 110 26"); svg.setAttribute("class", "sparkline"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", row.label + "數值趨勢；橫軸依實際時間間隔");
-    const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline"); line.setAttribute("points", plot.map(point => point.join(",")).join(" ")); svg.append(line);
-    plot.forEach(point => { const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle"); dot.setAttribute("cx", String(point[0])); dot.setAttribute("cy", String(point[1])); dot.setAttribute("r", "2"); svg.append(dot); });
-    return svg;
+    const xs = points.map(point => point.x), ys = points.map(point => point.y);
+    const xmin = xs[0], xmax = xs[xs.length - 1], ymin = Math.min(...ys), ymax = Math.max(...ys);
+    const padding = ymax === ymin ? Math.max(Math.abs(ymin) * .1, 1) : (ymax - ymin) * .12;
+    const low = ymin - padding, high = ymax + padding;
+    const x = value => 76 + (value - xmin) / (xmax - xmin) * 580;
+    const y = value => 175 - (value - low) / (high - low) * 145;
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 720 235"); svg.setAttribute("class", "trend-chart"); svg.setAttribute("role", "img");
+    const axis = row.time_basis === "report" ? "報告時間" : "量測 / 採檢時間";
+    svg.setAttribute("aria-label", row.label + "，" + points.length + " 筆數值；橫軸依實際" + axis + "間隔，縱軸 " + row.unit + "。完整數值見下表。");
+    const add = (tag, attributes, text, parent) => {
+      const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+      for (const [name, value] of Object.entries(attributes || {})) node.setAttribute(name, String(value));
+      if (text != null) node.textContent = String(text);
+      (parent || svg).append(node); return node;
+    };
+    const number = value => Number(value.toPrecision(5)).toString();
+    for (const value of [...new Set([ymin, (ymin + ymax) / 2, ymax])]) {
+      add("line", {x1: 76, x2: 656, y1: y(value), y2: y(value), class: "chart-grid"});
+      add("text", {x: 66, y: y(value) + 4, "text-anchor": "end", class: "chart-axis"}, number(value));
+    }
+    add("text", {x: 76, y: 16, class: "chart-axis"}, row.unit || "單位未提供");
+    add("polyline", {points: points.map(point => x(point.x) + "," + y(point.y)).join(" "), class: "chart-line"});
+    const labels = new Set([0, points.length - 1, ys.indexOf(ymin), ys.indexOf(ymax)]);
+    points.forEach((point, index) => {
+      const dot = add("circle", {cx: x(point.x), cy: y(point.y), r: 3, class: "chart-point"});
+      add("title", {}, (point.observation.time || point.observation.timestamp) + " · " + point.observation.value + " " + (row.unit || ""), dot);
+      if (labels.has(index)) add("text", {x: x(point.x), y: y(point.y) - 9, "text-anchor": index === 0 ? "start" : index === points.length - 1 ? "end" : "middle", class: "chart-value"}, point.observation.value == null ? number(point.y) : point.observation.value);
+    });
+    const crossYear = points[0].observation.timestamp.slice(0, 4) !== points[points.length - 1].observation.timestamp.slice(0, 4);
+    for (const index of [0, points.length - 1]) {
+      const point = points[index], stamp = point.observation.timestamp;
+      const date = (crossYear ? stamp.slice(0, 10) : stamp.slice(5, 10)).replace(/-/g, "/");
+      const time = point.observation.time_precision === "day" ? "" : stamp.slice(11, 16);
+      add("text", {x: x(point.x), y: 198, "text-anchor": index === 0 ? "start" : "end", class: "chart-axis"}, date + (time ? " " + time : ""));
+    }
+    add("text", {x: 366, y: 223, "text-anchor": "middle", class: "chart-axis"}, axis + "（實際時間間隔）");
+    const wrapper = element("div", null, "chart-scroll"); wrapper.append(svg); return wrapper;
   }
-  function trendTable(rows) {
-    const wrapper = element("div", null, "table-scroll"), table = element("table"), head = element("thead"), titles = element("tr"), body = element("tbody");
-    for (const title of ["項目", "較早 → 最近", "最新提供值", "涵蓋期間", "明細"]) { const cell = element("th", title); cell.scope = "col"; titles.append(cell); }
+  function observationTable(row) {
+    const wrapper = element("div", null, "table-scroll observation-table"), table = element("table"), head = element("thead"), titles = element("tr"), body = element("tbody");
+    const timeLabel = row.time_basis === "report" ? "報告時間" : "量測 / 採檢時間";
+    for (const title of [timeLabel, "結果" + (row.unit ? "（" + row.unit + "）" : ""), "時間精度"]) { const th = element("th", title); th.scope = "col"; titles.append(th); }
     head.append(titles); table.append(head);
-    for (const row of rows) {
-      const presentation = trendPresentation(row), values = presentation.known, latest = presentation.latest;
-      const uncertain = presentation.unknown.length > 0;
-      const tr = element("tr"), label = element("td", row.label, "trend-label"); label.append(element("span", row.unit || "單位未提供", "trend-unit"));
-      const trend = element("td"), chain = element("div", null, "trend-chain");
-      values.forEach((point, index) => { if (index) chain.append(element("span", presentation.separators[index], "trend-arrow")); const value = element("span", point.value); value.title = point.time || "時間未辨識"; chain.append(value); });
-      if (!values.length) chain.append(document.createTextNode("未辨識到可比較數值"));
-      trend.append(chain); const chart = sparkline(row); if (chart) trend.append(chart);
-      if (presentation.hasConflicts) trend.append(element("p", presentation.hasTimeConflict ? "時間或數值衝突，請核對" : "同時點數值衝突，請核對", "trend-span warning"));
-      if (uncertain) trend.append(element("p", "時間未明：" + presentation.unknown.map(point => point.value).join(" / "), "trend-span warning"));
-      const last = element("td", latest ? latest.value : presentation.latestConflict ? "時間或數值衝突，請核對" : "時間未明", "trend-last"); if (latest) last.title = latest.time || "時間未辨識";
-      if (uncertain) last.append(element("span", "另有時間未明值", "trend-unit"));
-      const span = element("td", row.span || "時間範圍未建立", "trend-span");
-      if (latest && latest.time) span.append(element("p", "最後量測：" + latest.time));
-      else if (presentation.latestConflict && presentation.lastKnownTime) span.append(element("p", "衝突資料時間：" + presentation.lastKnownTime));
-      if (row.note) span.append(element("p", row.note));
-      const detailsCell = element("td"), details = element("details", null, "trend-details"), entries = element("ul"); details.append(element("summary", "時間 / 來源"));
-      for (const point of row.all_values || values) {
-        const li = element("li", (point.time || "時間未辨識") + "｜" + point.value + (row.unit ? " " + row.unit : ""));
-        if (point.source_id) li.append(element("code", point.source_id)); entries.append(li);
-      }
-      details.append(entries); detailsCell.append(details); tr.append(label, trend, last, span, detailsCell); body.append(tr);
+    for (const point of row.all_values || row.values || []) {
+      const tr = element("tr");
+      tr.append(element("td", point.time || "時間未辨識"), element("td", point.value), element("td", !point.timestamp ? "未辨識；不判定先後" : point.time_precision === "day" ? "僅日期" : "日期與時間")); body.append(tr);
     }
     table.append(body); wrapper.append(table); return wrapper;
+  }
+  function trendTable(rows) {
+    const wrapper = element("div", null, "table-scroll"), table = element("table", null, "trend-table"), head = element("thead"), titles = element("tr"), body = element("tbody");
+    for (const title of ["檢驗項目", "最新已知值", "近期趨勢 · 較早 → 最近", "完整紀錄"]) { const cell = element("th", title); cell.scope = "col"; titles.append(cell); }
+    head.append(titles); table.append(head);
+    for (const row of rows) {
+      const presentation = trendPresentation(row), latest = presentation.latest;
+      const tr = element("tr"), label = element("th", row.label, "trend-label"); label.scope = "row";
+      label.append(element("span", [row.unit || "單位未提供", row.specimen, row.method].filter(Boolean).join(" · "), "trend-unit"));
+      const last = element("td", latest ? latest.value : presentation.latestConflict ? "待核對" : "時間未明", "trend-last");
+      if (latest && latest.time) last.append(element("span", (row.time_basis === "report" ? "報告 " : "") + latest.time, "trend-unit"));
+      const trend = element("td"), chain = element("div", null, "trend-chain");
+      const values = presentation.known.length ? presentation.known : presentation.unknown.slice(-3);
+      values.forEach((point, index) => { if (index) chain.append(element("span", presentation.known.length ? presentation.separators[index] : "/", "trend-arrow")); const value = element("span", point.value); value.title = point.time || "時間未辨識"; chain.append(value); });
+      if (!values.length) chain.append(document.createTextNode("未提供"));
+      trend.append(chain);
+      if (presentation.hasConflicts) trend.append(element("span", "時間或數值衝突", "trend-flag warning"));
+      if (presentation.unknown.length) trend.append(element("span", (presentation.known.length ? "另有 " : "") + presentation.unknown.length + " 筆時間未明", "trend-flag warning"));
+      const detailsCell = element("td"), count = (row.all_values || row.values || []).length;
+      const detailRow = element("tr", null, "trend-expanded-row"), detailCell = element("td"), content = element("div", null, "trend-expanded"); detailCell.colSpan = 4; detailRow.hidden = true;
+      let initialized = false;
+      const toggle = button(count + " 筆 · 展開", null, () => {
+        detailRow.hidden = !detailRow.hidden; toggle.setAttribute("aria-expanded", String(!detailRow.hidden)); toggle.textContent = count + " 筆 · " + (detailRow.hidden ? "展開" : "收合");
+        toggle.setAttribute("aria-label", (detailRow.hidden ? "展開 " : "收合 ") + row.label + " 的 " + count + " 筆完整紀錄");
+        if (!detailRow.hidden && !initialized) {
+          initialized = true;
+          content.append(element("h4", row.label + (row.specimen ? " · " + row.specimen : "")));
+          const chart = trendChart(row); if (chart) content.append(chart);
+          content.append(element("p", [row.span, row.reference ? "參考範圍：" + row.reference : "", row.note].filter(Boolean).join(" · "), "muted"));
+          if (row.time_basis === "report") content.append(element("p", "時間來自報告日期，不代表實際採檢時間。", "muted"));
+          if (!chart) content.append(element("p", "以表格保留原值；比較符號、定性結果或不確定的時間不連成折線。", "muted"));
+          content.append(observationTable(row));
+        }
+      }, "trend-toggle quiet");
+      toggle.setAttribute("aria-expanded", "false"); toggle.setAttribute("aria-label", "展開 " + row.label + " 的 " + count + " 筆完整紀錄");
+      detailsCell.append(toggle); tr.append(label, last, trend, detailsCell); body.append(tr); detailCell.append(content); detailRow.append(detailCell); body.append(detailRow);
+    }
+    table.append(body); wrapper.append(table); return wrapper;
+  }
+  function reportRecord(record, rawSource) {
+    const details = element("details", null, "source-record"), heading = element("summary"), title = element("span", record.title || record.type || "未命名報告", "report-title");
+    heading.append(title, element("span", [record.time, record.status].filter(Boolean).join(" · "), "report-meta")); details.append(heading);
+    const content = element("div", null, "report-content"); details.append(content);
+    let loaded = false, pending = false;
+    details.addEventListener("toggle", async () => {
+      if (!details.open || loaded || pending || !state) return;
+      const epoch = state.epoch; pending = true; content.replaceChildren(element("p", "正在開啟報告…", "muted"));
+      try {
+        let complete = record;
+        if (record.deferred) {
+          const cacheKey = epoch + ":" + record.id;
+          if (!sourceCache.has(cacheKey)) sourceCache.set(cacheKey, action("source_detail", {epoch, source_id: record.id}).then(result => result.source).catch(error => { sourceCache.delete(cacheKey); throw error; }));
+          complete = await sourceCache.get(cacheKey);
+        }
+        if (!alive || !state || state.epoch !== epoch || !details.isConnected) return;
+        if (!complete) throw new Error("尚未取得報告內容，請重新展開。");
+        content.replaceChildren();
+        renderSections(content, complete.sections, (target, text) => md.render(target, text, {hideCitations: true}));
+        if (!(complete.sections || []).length) {
+          if (complete.content) md.render(content, complete.content, {hideCitations: true});
+          else content.append(element("p", "未提供可顯示內容；請核對原始系統。", "muted"));
+        }
+        if (complete.truncated || record.truncated) content.append(element("p", "這份顯示內容已截短，請查看原文或院內報告。", "warning"));
+        if (complete.content) { const raw = element("details", null, "report-raw"); raw.append(element("summary", "查看原文" + (rawSource && complete.id ? " · " + complete.id : "")), element("pre", complete.content)); content.append(raw); }
+        loaded = true;
+      } catch (error) {
+        if (alive && state && state.epoch === epoch && details.isConnected) content.replaceChildren(element("p", error.message || "報告讀取失敗，請收合後重試。", "warning"));
+      } finally { pending = false; }
+    });
+    return details;
+  }
+  function reportBrowser(records, rawSource) {
+    const section = element("section", null, "report-browser"), toolbar = element("div", null, "data-toolbar"), search = element("input"), results = element("div"), status = element("p", "", "muted result-count");
+    const title = rawSource ? "原始資料" : "全部報告";
+    search.type = "search"; search.placeholder = "搜尋報告名稱 / 摘要"; search.setAttribute("aria-label", title + "：搜尋報告名稱或摘要");
+    let limit = 12, fullMatches = null, searchSequence = 0;
+    const searchFull = button("搜尋全文", null, async () => {
+      const query = search.value.trim(), epoch = state && state.epoch, sequence = ++searchSequence;
+      if (!query) { fullMatches = null; render(); return; }
+      searchFull.disabled = true; status.textContent = "正在搜尋本次已載入的內容…";
+      try {
+        const result = await action("source_search", {epoch, query});
+        if (!alive || !state || state.epoch !== epoch || sequence !== searchSequence || search.value.trim() !== query || !section.isConnected) return;
+        fullMatches = new Map((result.matches || []).map(match => [match.id, match.snippet || ""])); limit = 12; render();
+      } catch (error) { if (state && state.epoch === epoch && sequence === searchSequence && section.isConnected) status.textContent = error.message; }
+      finally { if (sequence === searchSequence) searchFull.disabled = false; }
+    }, "quiet");
+    const more = button("顯示更多", null, () => { limit += 12; render(); }, "quiet");
+    function render() {
+      const query = search.value.trim().toLocaleLowerCase();
+      const matching = records.filter(record => fullMatches ? fullMatches.has(record.id) : !query || [record.title, record.type, record.time, record.preview].filter(Boolean).join(" ").toLocaleLowerCase().includes(query));
+      const shown = matching.slice(0, limit);
+      results.replaceChildren(...shown.map(record => {
+        const node = reportRecord(record, rawSource), snippet = fullMatches && fullMatches.get(record.id);
+        if (snippet) node.insertBefore(element("p", snippet, "report-snippet"), node.children[1]);
+        return node;
+      }));
+      if (!matching.length) results.append(element("p", query ? "目前篩選沒有符合的報告；可改用全文搜尋，或清除搜尋查看全部。" : "未取得報告內容，不代表沒有報告。", "muted"));
+      status.textContent = (fullMatches ? "全文搜尋 · " : "") + "顯示 " + shown.length + " / " + matching.length + " 份" + (query ? "（本次共 " + records.length + " 份）" : "");
+      more.hidden = shown.length >= matching.length;
+    }
+    search.addEventListener("input", () => { searchSequence++; searchFull.disabled = false; fullMatches = null; limit = 12; render(); });
+    toolbar.append(element("h3", title), search, searchFull); section.append(toolbar, status, results, more); render(); return section;
+  }
+  function labBrowser(rows) {
+    const section = element("section", null, "lab-browser"), toolbar = element("div", null, "data-toolbar"), search = element("input"), status = element("p", "", "muted result-count"), results = element("div");
+    search.id = "lab-filter"; search.type = "search"; search.placeholder = "搜尋所有檢驗、檢體或單位"; search.setAttribute("aria-label", "搜尋所有檢驗，包含其他與罕見檢驗");
+    toolbar.append(element("h3", "檢驗趨勢"), search);
+    function render() {
+      const query = search.value.trim(), matching = sortedTrendRows(rows, query), groups = [];
+      for (const [name, title] of [["cbc", "血球 · WBC / Hb / PLT 優先"], ["chemistry", "生化與發炎指標"], ["other", "Differential / 其他與特殊檢驗"]]) {
+        const selected = matching.filter(row => name === "other" ? !["cbc", "chemistry"].includes(row.group) : row.group === name);
+        if (!selected.length) continue;
+        const group = element("details", null, "lab-group"); group.open = name !== "other" || Boolean(query);
+        group.append(element("summary", title + "（" + selected.length + " 項）"));
+        let built = false;
+        const build = () => { if (group.open && !built) { built = true; group.append(trendTable(selected)); } };
+        group.addEventListener("toggle", build); build(); groups.push(group);
+      }
+      results.replaceChildren(...groups);
+      if (!matching.length) results.append(element("p", query ? "沒有符合的趨勢項目。特殊檢驗也可能只存在報告內，可使用下方「搜尋全文」。" : "未可靠辨識出趨勢表，可展開報告核對原值。", "muted"));
+      status.textContent = "顯示 " + matching.length + " / " + rows.length + " 項 · 近期列出最近已知值；展開查看完整時間軸與表格";
+    }
+    search.addEventListener("input", render); section.append(toolbar, status, results); render(); return section;
   }
   function renderOverview(view) {
     const signature = JSON.stringify([state.epoch, view]);
     if (signature === renderedOverview) return;
     renderedOverview = signature;
+    sourceCache.clear();
     const target = $("overview");
     if (!view) { const empty = element("div", null, "empty-state"); empty.append(element("h2", state.selected_id ? "載入資料後，先看今天的變化" : "先選取病人"), element("p", "檢驗表、待辦與原始來源會顯示在這裡。未載入不代表沒有異常。")); target.replaceChildren(empty); return; }
     const nodes = [];
+    const coverage = coveragePresentation(view.coverage);
+    if (coverage) { const banner = element("div", null, "coverage-banner" + (coverage.warning ? " warning" : "")); banner.append(element("strong", coverage.title), element("span", coverage.text)); nodes.push(banner); }
     if (view.vitals && view.vitals.length) {
       const strip = element("div", null, "vitals-strip");
       for (const row of view.vitals) {
@@ -359,6 +566,8 @@
         strip.append(cell);
       }
       nodes.push(strip);
+      const vitalTrends = element("details", null, "section-details"); vitalTrends.append(element("summary", "生命徵象趨勢與完整時間"));
+      let built = false; vitalTrends.addEventListener("toggle", () => { if (vitalTrends.open && !built) { built = true; vitalTrends.append(trendTable(view.vitals)); } }); nodes.push(vitalTrends);
     }
     if (view.warnings && view.warnings.length) {
       const details = element("details", null, "overview-warnings"), list = element("ul");
@@ -366,23 +575,18 @@
       view.warnings.forEach(warning => list.append(element("li", warning))); details.append(list); nodes.push(details);
     }
     const briefs = element("div", null, "brief-grid");
-    briefs.append(shortList(view.todo_kind === "excerpt" ? "入院紀錄頂端摘錄" : "待辦 / 追蹤", view.todos, "未辨識到明確待辦，請核對入院紀錄。", 5), shortList("近期報告", view.reports, "未取得報告內容，不代表沒有報告。", 4), shortList("用藥紀錄", view.medications, "尚無可讀用藥紀錄。", 4)); nodes.push(briefs);
-    const rows = view.trends || [], cbc = rows.filter(row => row.group === "cbc"), chemistry = rows.filter(row => row.group === "chemistry"), other = rows.filter(row => !["cbc", "chemistry"].includes(row.group));
-    for (const [title, selected] of [["血球 · WBC / Hb / PLT", cbc], ["生化與發炎指標", chemistry]]) {
-      if (!selected.length) continue;
-      const section = element("section", null, "trend-section"); section.append(element("h3", title), trendTable(selected)); nodes.push(section);
-    }
-    if (other.length) { const details = element("details", null, "section-details"); details.append(element("summary", "Differential / 其他檢驗（" + other.length + " 項）"), trendTable(other)); nodes.push(details); }
-    if (!rows.length) nodes.push(element("p", "未可靠辨識出趨勢表；可展開原始來源核對，AI 不會替表格補造數值。", "muted"));
+    briefs.append(shortList(view.todo_kind === "excerpt" ? "入院紀錄頂端摘錄" : "待辦 / 追蹤", view.todos, "未辨識到明確待辦，請核對入院紀錄。", 5), shortList("用藥紀錄", view.medications, "尚無可讀用藥紀錄。", 4)); nodes.push(briefs);
+    nodes.push(labBrowser(view.trends || []));
+    const reports = Array.isArray(view.report_details) ? view.report_details : (view.sources || []).filter(source => /report|報告/i.test(source.type || ""));
+    nodes.push(reportBrowser(reports, false));
     const sources = element("details", null, "source-details"); sources.append(element("summary", "原始資料與完整時間（" + (view.sources || []).length + " 份來源）"));
-    for (const source of view.sources || []) {
-      const record = element("details", null, "source-record"); record.append(element("summary", [source.title || source.type, source.time].filter(Boolean).join(" · ")), element("p", [source.id, source.type, source.status].filter(Boolean).join(" · "), "muted"), element("pre", source.content || "未提供內容")); sources.append(record);
-    }
+    let sourcesBuilt = false; sources.addEventListener("toggle", () => { if (sources.open && !sourcesBuilt) { sourcesBuilt = true; sources.append(reportBrowser(view.sources || [], true)); } });
     nodes.push(sources); target.replaceChildren(...nodes);
   }
   function adoptDraft(key, incoming, force) {
     if (!incoming) return;
     const workspace = workspaces[key];
+    if (!workspace.dirty && incoming.revision === workspace.revision) renderPrivacy(key, incoming.privacy);
     if (!shouldAdoptDraft(incoming.revision, workspace.revision, workspace.dirty, force)) return;
     clearTimeout(workspace.timer);
     workspace.data.value = incoming.data || ""; workspace.question.value = incoming.question || "";
@@ -390,6 +594,24 @@
     workspace.profile.value = incoming.profile || (key === "emergency" ? "emergency_fast" : "fast");
     workspace.revision = Number(incoming.revision) || 0; workspace.syncedRevision = workspace.revision;
     workspace.dirty = false; workspace.modified = false; workspace.draftStatus.textContent = "";
+    renderPrivacy(key, incoming.privacy);
+  }
+  function renderPrivacy(key, privacy) {
+    const status = privacyPresentation(privacy), workspace = workspaces[key];
+    workspace.privacyStatus.textContent = status.text;
+    workspace.privacyStatus.className = "privacy-status" + (status.warning ? " warning" : "");
+  }
+  async function handleDeidentify(key) {
+    try {
+      await exclusive(async () => {
+        await flushDraft(key);
+        const epoch = state.epoch, revision = workspaces[key].revision;
+        await action("deidentify", {epoch, workspace: key, revision});
+        if (!alive || !state || state.epoch !== epoch) return;
+        transformedDrafts.set(key, {epoch, revision}); closePreview();
+        await refreshState();
+      });
+    } catch (error) { notice(error.message, "error"); }
   }
   function renderAnswer(key, answer, revision) {
     const workspace = workspaces[key];
@@ -425,7 +647,8 @@
     if (!job || job.status === "running" || knownJobs.has(job.id)) return false;
     knownJobs.add(job.id);
     if (knownJobs.size > 40) knownJobs.delete(knownJobs.values().next().value);
-    const adopt = adoptAfterJobs.delete(job.id) && job.status === "complete";
+    const partialLoad = job.kind === "load" && job.status === "cancelled" && job.result && job.result.partial && state.overview && state.overview.coverage && state.overview.coverage.cancelled;
+    const adopt = adoptAfterJobs.delete(job.id) && (job.status === "complete" || partialLoad);
     if (job.status === "failed") notice(job.error || "操作失敗，請重試。", "error");
     else if (job.status === "complete" && job.result) {
       const result = job.result;
@@ -450,6 +673,7 @@
     const jobNeedsAdoption = processJob(state.job), forceDrafts = epochChanged || jobNeedsAdoption;
     if (epochChanged) {
       closePreview(); for (const key of Object.keys(workspaces)) clearWorkspaceLocal(key);
+      transformedDrafts.clear(); sourceCache.clear();
       renderedOverview = ""; renderedPatients = "";
     }
     if (oldSettings && oldSettings !== JSON.stringify(state.settings)) closePreview();
@@ -464,13 +688,19 @@
     setText("snapshot", minutes == null ? "尚未載入這位病人的資料；可直接輸入病況提問" : "資料擷取於 " + minutes + " 分鐘前 · 生命徵象以實際量測時間為準");
     $("snapshot").className = minutes != null && minutes >= 15 ? "muted warning" : "muted";
     renderProfiles(state.profiles || []);
-    for (const key of Object.keys(workspaces)) { adoptDraft(key, state.drafts[key], forceDrafts); renderAnswer(key, state.answers[key], state.drafts[key].revision); }
+    for (const key of Object.keys(workspaces)) {
+      const ticket = transformedDrafts.get(key), workspace = workspaces[key];
+      const transformed = ticket && ticket.epoch === state.epoch && state.drafts[key].revision > ticket.revision && workspace.revision <= ticket.revision && !workspace.dirty;
+      adoptDraft(key, state.drafts[key], forceDrafts || transformed);
+      if (ticket && state.drafts[key].revision > ticket.revision) transformedDrafts.delete(key);
+      renderAnswer(key, state.answers[key], state.drafts[key].revision);
+    }
     renderPatients(); renderOverview(state.overview);
     if (!settingsDirty) {
       $("external-ai").checked = Boolean(state.settings.external_ai_enabled); $("privacy-ack").checked = Boolean(state.settings.privacy_acknowledged);
       $("require-zdr").checked = Boolean(state.settings.require_zdr); $("developer-mode").checked = Boolean(state.settings.developer_mode);
     }
-    if (!lookbackDirty || jobNeedsAdoption) { $("lookback").value = String(state.settings.lab_lookback_months || 3); lookbackDirty = false; }
+    if (!lookbackDirty || jobNeedsAdoption) { $("lookback").value = String(state.settings.lab_lookback_months || 12); lookbackDirty = false; }
     setText("key-state", state.has_api_key ? "Key 已儲存" : "尚未設定 Key");
     if (!state.settings.developer_mode) { $("developer-editor").hidden = true; developer = null; }
     updateControls();
@@ -493,6 +723,8 @@
     const blocked = Boolean(result.blocked);
     setText("preview-title", blocked ? "先修正疑似識別內容" : mode === "copy" ? "檢查要複製給其他 AI 的 input" : "確認將送出的資料");
     setText("preview-meta", [result.model || "", result.snapshot_age_minutes == null ? "手動提供資料" : "擷取約 " + result.snapshot_age_minutes + " 分鐘前"].filter(Boolean).join(" · "));
+    const privacy = privacyPresentation(result.deidentification);
+    setText("preview-privacy", privacy.text); $("preview-privacy").className = "privacy-status" + (privacy.warning ? " warning" : "");
     $("preview-error").hidden = !blocked;
     setText("preview-error", blocked ? (result.error || "內容仍有疑似識別資料，請修正後重新檢查。") + (result.risks && result.risks.length ? "\n" + result.risks.join("、") : "") : "");
     $("preview-clinical").hidden = blocked; setText("preview-clinical", result.clinical || "");
@@ -618,6 +850,7 @@
     await Promise.all(Object.keys(workspaces).map(flushDraft)); closePreview();
     await startJob("load", {epoch: state.epoch, months: Number($("lookback").value)}, true);
   }));
+  bind("cancel-load", () => exclusive(async () => { await action("cancel"); await refreshState(); }));
   bind("export-docx", () => exportList("docx")); bind("export-csv", () => exportList("csv"));
   bind("preview-close", closePreview);
   $("preview-dialog").addEventListener("cancel", event => { event.preventDefault(); closePreview(); });

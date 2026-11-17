@@ -3,6 +3,7 @@ const {test} = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const vm = require("node:vm");
 const assets = path.join(__dirname, "../src/wardlens/web/assets");
 const markdown = require(path.join(assets, "markdown.js"));
 const ui = require(path.join(assets, "app.js"));
@@ -165,6 +166,204 @@ test("server time-conflict flag prevents all arrows including mixed day-only and
   assert.equal(result.latest, null);
   assert.equal(result.latestConflict, true);
   assert.deepEqual(result.separators, ["", "/", "/"]);
+});
+
+test("full-window graphs retain older results and refuse unlike specimens, methods and time bases", () => {
+  const observations = Array.from({length: 8}, (_, index) => ({timestamp: `2026-10-${String(index + 1).padStart(2, "0")}T08:00:00+08:00`, value: String(index + 1), numeric: index + 1}));
+  const row = {chartable: true, unit: "mg/L", specimen: "urine", method: "HPLC", time_basis: "report", values: observations.slice(-5), all_values: observations};
+  assert.equal(ui.validPlotPoints(row).length, 8);
+  assert.equal(ui.validPlotPoints(row)[0].y, 1);
+  assert.equal(ui.validPlotPoints({...row, all_values: [...observations].reverse()})[0].y, 1);
+  for (const change of [{unit: "mg/dL"}, {specimen: "blood"}, {method: "immunoassay"}, {time_basis: "collection"}, {value: "<0.1", numeric: .1}, {value: "Negative", numeric: 0}, {timestamp: ""}]) {
+    assert.deepEqual(ui.validPlotPoints({...row, all_values: [{...observations[0], ...change}, ...observations.slice(1)]}), []);
+  }
+  assert.deepEqual(ui.validPlotPoints({...row, specimen: "", all_values: [{...observations[0], specimen: "urine"}, ...observations.slice(1)]}), []);
+});
+
+test("all-test search includes rare assays and preserves CBC priority without merging specimens", () => {
+  const rows = [{label: "PLT", group: "cbc"}, {label: "PBG", unit: "mg/L", specimen: "urine", group: "other"}, {label: "Hb", group: "cbc"}, {label: "WBC", group: "cbc"}, {label: "PBG", unit: "nmol/L", specimen: "plasma", group: "other"}];
+  assert.deepEqual(ui.sortedTrendRows(rows, "").map(row => row.label), ["WBC", "Hb", "PLT", "PBG", "PBG"]);
+  assert.equal(ui.sortedTrendRows(rows, "pbg").length, 2);
+  assert.equal(ui.sortedTrendRows(rows, "PBG urine")[0].unit, "mg/L");
+  assert.equal(ui.sortedTrendRows(rows, "PLASMA")[0].unit, "nmol/L");
+  assert.equal(rows[0].label, "PLT");
+});
+
+test("structured reports retain ragged cells, qualitative values and HTML as inert text", () => {
+  const target = document.createElement("section");
+  ui.renderSections(target, [
+    {kind: "text", text: "## 特殊檢驗\nPBG trend 待核對。 [SRC-001]"},
+    {kind: "table", caption: "尿液", headers: ["項目", "結果"], rows: [["PBG", "<0.1", "mg/L"], ["Porphyrins", "Negative"], ["<img src=x onerror=alert(1)>", "<script>bad()</script>"]]},
+  ], (node, text) => markdown.render(node, text, {hideCitations: true}));
+  const nodes = descendants(target), body = nodes.find(node => node.tagName === "tbody"), headers = nodes.filter(node => node.tagName === "th");
+  assert.equal(body.children[0].children.length, 3);
+  assert.equal(body.children[1].children.length, 3);
+  assert.match(headers[2].textContent, /原文未命名/);
+  for (const retained of ["<0.1", "mg/L", "Negative", "<script>bad()</script>"]) assert.ok(target.textContent.includes(retained));
+  assert.ok(nodes.some(node => node.tagName === "h2"));
+  assert.ok(!nodes.some(node => ["img", "script"].includes(node.tagName)));
+  assert.doesNotMatch(target.textContent, /SRC-001/);
+});
+
+test("coverage never equates missing counters or cancelled partial results with completeness", () => {
+  assert.equal(ui.coveragePresentation({}), null);
+  const partial = ui.coveragePresentation({report_loaded: 18, report_candidates: 40, report_discovery_complete: false, report_details_complete: false, cancelled: true});
+  assert.equal(partial.warning, true);
+  assert.match(partial.title, /已停止/);
+  assert.match(partial.text, /18.*40/);
+  assert.doesNotMatch(partial.text, /(?:^|\s)0 (?:類|份)/);
+  const incomplete = ui.coveragePresentation({report_loaded: 18});
+  assert.doesNotMatch(incomplete.title, /完成/);
+  assert.doesNotMatch(ui.coveragePresentation({report_discovery_complete: true, report_details_complete: true, report_failed: 1}).title, /完成/);
+  assert.match(ui.coveragePresentation({report_discovery_complete: true, report_details_complete: true}).title, /完成/);
+});
+
+test("privacy summaries distinguish processed draft, residual findings and edited text", () => {
+  assert.match(ui.privacyPresentation({automatic: true, replacement_count: 7, residual_count: 0}).text, /已處理 7 項/);
+  assert.equal(ui.privacyPresentation({automatic: true, replacement_count: 7, residual_count: 0}).warning, false);
+  assert.match(ui.privacyPresentation({checked: true, replacement_count: 3, residual_count: 2}).text, /疑似剩餘 2 項需檢查/);
+  assert.equal(ui.privacyPresentation({checked: true, replacement_count: 3, residual_count: 2}).warning, true);
+  assert.match(ui.privacyPresentation({automatic: false, replacement_count: 7}).text, /尚未重新檢查/);
+  assert.doesNotMatch(ui.privacyPresentation({automatic: true}).text, /0 項/);
+});
+
+// Exercise the real event handlers and asynchronous API ordering without adding
+// a browser dependency to the Windows application or requiring a hospital login.
+async function browserHarness(handleAction) {
+  const nodes = [], timers = new Map(), requests = [];
+  let timerSequence = 0;
+  class BrowserNode extends Node {
+    constructor(tag, ownerDocument, text = "") {
+      super(tag, ownerDocument, text); this.dataset = {}; this.attributes = {}; this.listeners = {}; this.value = ""; this.checked = false; this.hidden = false; this.open = false; this.isConnected = true;
+      this.classList = {toggle() {}};
+    }
+    append(...children) { children.forEach(child => this.appendChild(typeof child === "string" ? this.ownerDocument.createTextNode(child) : child)); }
+    setAttribute(key, value) { this.attributes[key] = String(value); }
+    removeAttribute(key) { delete this.attributes[key]; }
+    addEventListener(name, handler) { (this.listeners[name] ||= []).push(handler); }
+    insertBefore(node, reference) { this.children.splice(Math.max(0, this.children.indexOf(reference)), 0, node); }
+    showModal() { this.open = true; }
+    close() { this.open = false; }
+    async dispatch(name) { for (const handler of this.listeners[name] || []) await handler({preventDefault() {}}); }
+  }
+  const doc = {
+    createElement(tag) { const node = new BrowserNode(tag, this); nodes.push(node); return node; },
+    createElementNS(_namespace, tag) { return this.createElement(tag); },
+    createTextNode(text) { return new BrowserNode("#text", this, String(text)); },
+    createDocumentFragment() { return new BrowserNode("#fragment", this); },
+    getElementById(id) { return nodes.find(node => node.id === id); },
+    querySelectorAll(selector) { return nodes.filter(node => selector === "[data-idle]" ? "idle" in node.dataset : selector === "[data-tab]" ? "tab" in node.dataset : selector === "input,textarea" ? ["input", "textarea"].includes(node.tagName) : false); },
+  };
+  const html = fs.readFileSync(path.join(assets, "index.html"), "utf8");
+  for (const match of html.matchAll(/<([a-z][\w-]*)\b([^>]*\bid="([^"]+)"[^>]*)>/g)) {
+    const node = doc.createElement(match[1]); node.id = match[3];
+    if (/\bdata-idle\b/.test(match[2])) node.dataset.idle = "";
+    node.checked = /\bchecked\b/.test(match[2]);
+  }
+  const draft = profile => ({revision: 1, data: "existing data", question: "", workflow: "rounding", profile, privacy: {automatic: true, replacement_count: 2, residual_count: 0}});
+  const server = {epoch: 4, version: "test", busy: false, logged_in: true, demo: true, selected_id: "patient-1", selected: {name: "Synthetic", age: "40"}, patients: [], list_status: "", status: "Ready", snapshot_age_minutes: 0, profiles: [{key: "fast", label: "Fast", model: "synthetic", reasoning_effort: "low"}, {key: "emergency_fast", label: "Emergency", model: "synthetic", reasoning_effort: "low"}], drafts: {rounding: draft("fast"), emergency: draft("emergency_fast")}, answers: {rounding: {status: "idle", text: ""}, emergency: {status: "idle", text: ""}}, settings: {lab_lookback_months: 12}, overview: null};
+  const context = {
+    document: doc, window: {WardLensMarkdown: markdown, addEventListener() {}, confirm: () => true}, location: {hash: "#synthetic-local-token", pathname: "/"}, history: {replaceState() {}}, navigator: {}, AbortController,
+    setTimeout(fn, delay) { const id = ++timerSequence; timers.set(id, {fn, delay}); return id; }, clearTimeout(id) { timers.delete(id); },
+    async fetch(url, options) {
+      const body = options.body ? JSON.parse(options.body) : null; requests.push({url, body});
+      let response;
+      if (handleAction) response = await handleAction(url, body, server);
+      if (response === undefined) {
+        if (url === "/api/state") response = JSON.parse(JSON.stringify(server));
+        else if (url === "/api/draft") { server.drafts[body.workspace] = {...body, privacy: {automatic: false}}; response = {ok: true}; }
+        else if (url === "/api/deidentify") { const draft = server.drafts[body.workspace]; server.drafts[body.workspace] = {...draft, data: "[REDACTED DATA]", question: "[REDACTED QUESTION]", revision: draft.revision + 1, privacy: {automatic: true, replacement_count: 3, residual_count: 1}}; response = {ok: true}; }
+        else response = {ok: true};
+      }
+      return {ok: true, status: 200, async json() { return response; }};
+    },
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(assets, "app.js"), "utf8"), context);
+  const settle = () => new Promise(resolve => setImmediate(resolve));
+  await settle(); await settle();
+  return {doc, server, requests, settle, nodes, async poll() { const timer = [...timers.values()].find(item => item.delay === 5000 || item.delay === 700); assert.ok(timer); await timer.fn(); }};
+}
+
+test("repeat de-identification flushes both edited fields first and adopts the server-redacted revision", async () => {
+  const browser = await browserHarness(), get = id => browser.doc.getElementById(id);
+  get("rounding-data").value = "synthetic data with new identifier";
+  await get("rounding-data").dispatch("input");
+  get("rounding-question").value = "synthetic question with identifier";
+  await get("rounding-question").dispatch("input");
+  assert.match(get("rounding-privacy").textContent, /尚未重新檢查/);
+  await get("rounding-deidentify").dispatch("click");
+  const posted = browser.requests.filter(request => request.body);
+  assert.equal(posted[0].url, "/api/draft");
+  assert.equal(posted[0].body.data, "synthetic data with new identifier");
+  assert.equal(posted[0].body.question, "synthetic question with identifier");
+  assert.equal(posted[1].url, "/api/deidentify");
+  assert.equal(posted[1].body.revision, posted[0].body.revision);
+  assert.equal(posted[1].body.epoch, 4);
+  assert.equal(get("rounding-data").value, "[REDACTED DATA]");
+  assert.equal(get("rounding-question").value, "[REDACTED QUESTION]");
+  assert.match(get("rounding-privacy").textContent, /已處理 3 項.*剩餘 1 項/);
+  get("rounding-question").value = "a newer bedside update";
+  await get("rounding-question").dispatch("input");
+  await browser.poll();
+  assert.equal(get("rounding-question").value, "a newer bedside update");
+  assert.match(get("rounding-privacy").textContent, /尚未重新檢查/);
+});
+
+test("deferred report contents load only on expansion and stale responses cannot enter another patient", async () => {
+  let resolveReport;
+  const browser = await browserHarness((url, body, server) => {
+    if (url === "/api/state" && !server.overview) server.overview = {report_details: [{id: "report-1", title: "Rare assay", time: "11/01", deferred: true}], trends: [], sources: []};
+    if (url === "/api/source_detail") return new Promise(resolve => { resolveReport = resolve; });
+  });
+  assert.ok(!browser.requests.some(request => request.url === "/api/source_detail"));
+  const report = browser.nodes.find(node => node.className === "source-record");
+  report.open = true;
+  const pending = report.dispatch("toggle");
+  await browser.settle();
+  assert.equal(browser.requests.filter(request => request.url === "/api/source_detail").length, 1);
+  assert.deepEqual(browser.requests.find(request => request.url === "/api/source_detail").body, {epoch: 4, source_id: "report-1"});
+  browser.server.epoch = 5; browser.server.overview = {report_details: [], trends: [], sources: []};
+  await browser.poll();
+  resolveReport({source: {sections: [{kind: "text", text: "OLD PATIENT RESULT"}], content: "OLD PATIENT RESULT"}});
+  await pending;
+  assert.doesNotMatch(report.textContent, /OLD PATIENT RESULT/);
+  assert.doesNotMatch(browser.doc.getElementById("overview").textContent, /OLD PATIENT RESULT/);
+});
+
+test("expanded charts show the complete window with value and report-time labels", async () => {
+  const points = Array.from({length: 8}, (_, index) => ({timestamp: `2026-10-${String(index + 1).padStart(2, "0")}T08:00:00+08:00`, time: `10/${String(index + 1).padStart(2, "0")} 08:00`, value: String(index + 1), numeric: index + 1, time_precision: "minute"}));
+  const browser = await browserHarness((url, _body, server) => {
+    if (url === "/api/state" && !server.overview) server.overview = {trends: [{label: "CRP", group: "chemistry", unit: "mg/L", chartable: true, time_basis: "report", all_values: points, values: points.slice(-5), latest_known: points[7]}], report_details: [], sources: []};
+  });
+  assert.ok(!browser.nodes.some(node => node.tagName === "svg"));
+  const expand = browser.nodes.find(node => node.className === "trend-toggle quiet");
+  await expand.dispatch("click");
+  const svg = browser.nodes.find(node => node.tagName === "svg");
+  assert.ok(svg);
+  assert.equal(descendants(svg).filter(node => node.tagName === "circle").length, 8);
+  for (const label of ["mg/L", "10/01 08:00", "10/08 08:00", "報告時間（實際時間間隔）"]) assert.ok(svg.textContent.includes(label));
+  const expanded = browser.nodes.find(node => node.className === "trend-expanded");
+  assert.match(expanded.textContent, /不代表實際採檢時間/);
+  const body = descendants(expanded).find(node => node.tagName === "tbody");
+  assert.equal(body.children.length, 8);
+});
+
+test("rare assays can be found through all locally loaded report bodies beyond the display page", async () => {
+  const browser = await browserHarness((url, _body, server) => {
+    if (url === "/api/state" && !server.overview) server.overview = {trends: [], sources: [], report_details: Array.from({length: 30}, (_, index) => ({id: "report-" + index, title: "General report " + index, deferred: true}))};
+    if (url === "/api/source_search") return {matches: [{id: "report-28", snippet: "Urine PBG 3.2 mg/L"}], total: 1};
+  });
+  const overview = browser.doc.getElementById("overview");
+  assert.match(overview.textContent, /顯示 12 \/ 30 份/);
+  const search = browser.nodes.find(node => node.placeholder === "搜尋報告名稱 / 摘要");
+  search.value = "PBG"; await search.dispatch("input");
+  assert.match(overview.textContent, /沒有符合的報告/);
+  const fullSearch = browser.nodes.find(node => node.tagName === "button" && node.textContent === "搜尋全文");
+  await fullSearch.dispatch("click");
+  assert.match(overview.textContent, /General report 28/);
+  assert.match(overview.textContent, /全文搜尋 · 顯示 1 \/ 1 份/);
+  assert.equal(browser.requests.find(request => request.url === "/api/source_search").body.query, "PBG");
+  assert.ok(!browser.requests.some(request => request.url === "/api/source_detail"));
 });
 
 test("bundled frontend has no browser persistence, HTML sink or remote asset dependency", () => {

@@ -592,7 +592,7 @@ class VGHReadOnlyAdapter:
         """Exhaust returned annual index pages, then every safe report detail."""
         end = bundle.fetched_at.astimezone(EMR_TIMEZONE).date()
         start = months_before(end, bundle.lookback_months or 12)
-        candidates: dict[str, tuple[datetime | None, str]] = {}
+        candidates: dict[str, tuple[datetime | None, str, str]] = {}
         seen_rows: set[str] = set()
         unknown_dates = 0
         coverage = bundle.coverage
@@ -693,6 +693,7 @@ class VGHReadOnlyAdapter:
                             continue
                         parsed_rows += 1
                         when = None
+                        precision = ""
                         if len(cells) > date_column:
                             cells[date_column] = normalize_result_date(cells[date_column])
                             dates = source_dates(cells[date_column])
@@ -701,8 +702,9 @@ class VGHReadOnlyAdapter:
                                 if not start <= day <= end:
                                     continue
                                 when = datetime(day.year, day.month, day.day, tzinfo=EMR_TIMEZONE)
+                                precision = "day"
                                 clock = re.search(
-                                    r"(?<!\d)([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?",
+                                    r"(?<!\d)([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?(?![\d:])",
                                     cells[date_column],
                                 )
                                 if clock:
@@ -711,6 +713,7 @@ class VGHReadOnlyAdapter:
                                         minute=int(clock[2]),
                                         second=int(clock[3] or 0),
                                     )
+                                    precision = "second" if clock[3] is not None else "minute"
                         lines.append(("[DATE UNKNOWN] " if when is None else "") + "\t".join(cells))
                         row_key = sha256(
                             (
@@ -737,7 +740,7 @@ class VGHReadOnlyAdapter:
                                 rejected = True
                                 continue
                             valid = True
-                            candidates.setdefault(detail_url, (when, cells[0]))
+                            candidates.setdefault(detail_url, (when, cells[0], precision))
                         if not valid or rejected:
                             coverage["report_skipped"] += 1
                         if rejected:
@@ -792,7 +795,7 @@ class VGHReadOnlyAdapter:
         oldest = datetime.min.replace(tzinfo=EMR_TIMEZONE)
         ordered = sorted(candidates.items(), key=lambda item: item[1][0] or oldest, reverse=True)
         truncated = False
-        for url, (when, title) in ordered:
+        for url, (when, title, precision) in ordered:
             self._check_cancelled()
             try:
                 budget.consume()
@@ -820,6 +823,7 @@ class VGHReadOnlyAdapter:
                     source_url=page.url,
                     source_record_id=sha256(canonical_url(page.url).encode()).hexdigest()[:20],
                     observed_at=when,
+                    observed_precision=precision,
                     status="status_unverified",
                 )
                 self._add_checked_record(bundle, record)

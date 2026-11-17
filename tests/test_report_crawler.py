@@ -8,7 +8,12 @@ from bs4 import BeautifulSoup
 
 from wardlens.config import AppSettings
 from wardlens.emr.base import EMRCancelled, InterfaceChangedError, RequestBudgetExceeded
-from wardlens.emr.report_links import lab_categories, pagination_urls, report_detail_url
+from wardlens.emr.report_links import (
+    lab_categories,
+    pagination_urls,
+    report_detail_url,
+    same_report_identity,
+)
 from wardlens.emr.vgh import VGHReadOnlyAdapter, _FetchedPage, _RequestBudget
 from wardlens.models import EMR_TIMEZONE, PatientBundle, PatientSummary, SourceRecord
 
@@ -114,6 +119,88 @@ def test_literal_report_wrapper_is_parsed_without_executing_script():
     assert report_detail_url(
         "/emr/reports/viewreport.cfm?report=rare&histno=90000001", INDEX_URL, PATIENT.histno
     )
+
+
+def test_returned_findres_opaque_identity_is_loaded_without_guessing_key_names(monkeypatch):
+    adapter, current, calls = VGHReadOnlyAdapter(), bundle(), []
+    href = "?action=findRes&histno=90000001&rspkey=OPAQUE-7318&specid=URINE"
+
+    def fetch(url):
+        calls.append(url)
+        if "tmonth=" in url:
+            return _FetchedPage(report_index([("Rare report", "2026/10/15", href)]), url)
+        return _FetchedPage("<pre>Porphobilinogen synthetic rare result</pre>", url)
+
+    monkeypatch.setattr(adapter, "_get", fetch)
+    adapter._fetch_report_history(current, _RequestBudget(10))
+    assert len(calls) == 2
+    assert current.coverage["report_loaded"] == 1
+    assert current.coverage["report_details_complete"]
+    assert parse_qs(urlparse(calls[1]).query)["rspkey"] == ["OPAQUE-7318"]
+
+
+@pytest.mark.parametrize(
+    "href",
+    [
+        "?action=findRes&rspkey=OPAQUE&mode=view",
+        "?action=findRes&rspkey=OPAQUE&operation=read",
+        "?action=findRes&rspkey=OPAQUE&cmd=show",
+        "?action=findRes&rspkey=OPAQUE&histno=99999999",
+        "?action=findRes&tmonth=2026&tdept=ALL&page=2&sortby=date",
+        "?action=findRes&rspkey=",
+        "/emr/unknown.cfm?rspkey=OPAQUE",
+    ],
+)
+def test_opaque_identifiers_do_not_expand_endpoint_or_operation_authority(href):
+    assert report_detail_url(href, INDEX_URL, PATIENT.histno) is None
+
+
+@pytest.mark.parametrize("change", ["replace", "remove", "add"])
+def test_every_opaque_identity_field_must_survive_redirect(change):
+    original = "https://web9.vghtpe.gov.tw/emr/qemr/qemr.cfm?action=findRes&histno=90000001&rspkey=OPAQUE&specid=URINE"
+    redirected = {
+        "replace": original.replace("specid=URINE", "specid=PLASMA"),
+        "remove": original.replace("&specid=URINE", ""),
+        "add": original + "&anotherkey=OTHER",
+    }[change]
+    assert same_report_identity(original, original, PATIENT.histno)
+    assert not same_report_identity(original, redirected, PATIENT.histno)
+
+
+@pytest.mark.parametrize(
+    ("source_time", "precision", "clock"),
+    [
+        ("2026/10/15", "day", (0, 0, 0)),
+        ("2026/10/15 00:00", "minute", (0, 0, 0)),
+        ("2026/10/15 11:43", "minute", (11, 43, 0)),
+        ("2026/10/15 11:43:00", "second", (11, 43, 0)),
+        ("2026/10/15 11:43:27", "second", (11, 43, 27)),
+        ("2026/10/15 11:43:99", "day", (0, 0, 0)),
+        ("unknown", "", None),
+    ],
+)
+def test_report_timestamp_retains_source_precision(source_time, precision, clock, monkeypatch):
+    adapter, current = VGHReadOnlyAdapter(), bundle()
+
+    def fetch(url):
+        if "tmonth=" in url:
+            return _FetchedPage(
+                report_index([("Panel", source_time, "?action=findRes&report=1")]), url
+            )
+        return _FetchedPage("<pre>Synthetic report</pre>", url)
+
+    monkeypatch.setattr(adapter, "_get", fetch)
+    adapter._fetch_report_history(current, _RequestBudget(10))
+    record = current.records_of("report")[0]
+    assert record.observed_precision == precision
+    if clock is None:
+        assert record.observed_at is None
+    else:
+        assert (
+            record.observed_at.hour,
+            record.observed_at.minute,
+            record.observed_at.second,
+        ) == clock
 
 
 def test_numbered_hidden_form_and_next_links_are_bound_to_patient_year_and_department():

@@ -47,6 +47,53 @@ _DETAIL_KEYS = {
     "labno",
     "id",
 }
+_INDEX_FILTERS = (
+    _PATIENT_KEYS
+    | _CURSORS
+    | {
+        "action",
+        "tmonth",
+        "tdept",
+        "resdtype",
+        "resdtmonth",
+        "year",
+        "month",
+        "dept",
+        "department",
+        "from",
+        "to",
+        "start",
+        "end",
+        "sort",
+        "sortby",
+        "orderby",
+        "order",
+        "limit",
+        "pagesize",
+        "page_size",
+        "format",
+        "view",
+        "template",
+        "lang",
+        "language",
+        "print",
+    }
+)
+_OPERATION_CONTROLS = {
+    "mode",
+    "method",
+    "op",
+    "operation",
+    "cmd",
+    "command",
+    "task",
+    "function",
+    "func",
+    "event",
+    "eventtarget",
+    "do",
+    "handler",
+}
 _WRITE = re.compile(
     r"delete|update|insert|save|submit|logout|remove|cancel|upload|execute|approve|publish|edit",
     re.I,
@@ -139,12 +186,20 @@ def report_detail_url(href: str, base_url: str, histno: str) -> str | None:
         return None
     parsed, query = urlparse(url), _query(url)
     assert query is not None
-    if not any(query.get(key) for key in _DETAIL_KEYS):
+    if _OPERATION_CONTROLS & query.keys():
         return None
     if parsed.path.lower() == _QEMR:
         if query.get("action", "").lower() != "findres":
             return None
+        # A returned row may use a hospital-specific opaque identifier whose
+        # name is absent from our fixtures. The already-known read-only findRes
+        # endpoint is sufficient; do not guess its ID parameter name. Pure
+        # index/filter links still cannot masquerade as report details.
+        if not any(value for key, value in query.items() if key not in _INDEX_FILTERS):
+            return None
     else:
+        if not any(query.get(key) for key in _DETAIL_KEYS):
+            return None
         # A returned result display page is allowed; an unknown endpoint is not.
         # This is deliberately narrower than permitting every /emr/ GET.
         filename = parsed.path.rsplit("/", 1)[-1]
@@ -187,10 +242,22 @@ def same_report_identity(requested_url: str, returned_url: str, histno: str) -> 
     requested, returned = _query(requested_url), _query(returned_url)
     if requested is None or returned is None:
         return False
-    return all(
-        returned.get(key) == requested[key]
-        for key in (_DETAIL_KEYS | _PATIENT_KEYS) & requested.keys()
-    )
+    if urlparse(requested_url).path.lower() == _QEMR:
+        # Preserve every original opaque field, not only familiar report-ID keys.
+        # Adding or removing one can change the selected report just as a new
+        # value can, even if another recognized ID happens to remain the same.
+        requested_identity = {
+            key: value for key, value in requested.items() if key not in _INDEX_FILTERS
+        }
+        returned_identity = {
+            key: value for key, value in returned.items() if key not in _INDEX_FILTERS
+        }
+        if requested_identity != returned_identity:
+            return False
+    else:
+        if any(returned.get(key) != requested[key] for key in _DETAIL_KEYS & requested.keys()):
+            return False
+    return all(returned.get(key) == requested[key] for key in _PATIENT_KEYS & requested.keys())
 
 
 def _pagination_url(href: str, base_url: str, histno: str) -> str | None:

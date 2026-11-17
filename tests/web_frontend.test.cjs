@@ -156,6 +156,17 @@ test("incomplete chronology keeps known-time arrows but never orders equal-time 
   assert.equal(duplicate.hasConflicts, false);
 });
 
+test("compact deferred trends preserve conflict semantics and the full unknown-time count", () => {
+  const first = {timestamp: "2026-10-29T08:00:00+08:00", value: "4.0"};
+  const second = {timestamp: "2026-10-30T08:00:00+08:00", time: "10/30 08:00", value: "1.5"};
+  const result = ui.trendPresentation({deferred: true, all_values: [], values: [first, second], unknown_values: [{timestamp: "", value: "9.0"}], unknown_count: 27, latest_known: null, has_time_conflict: true});
+  assert.equal(result.latestConflict, true);
+  assert.equal(result.lastKnownTime, "10/30 08:00");
+  assert.equal(result.unknownCount, 27);
+  assert.equal(result.unknown.length, 1);
+  assert.deepEqual(result.separators, ["", "/"]);
+});
+
 test("server time-conflict flag prevents all arrows including mixed day-only and precise times", () => {
   const prior = {timestamp: "2026-10-29T08:00:00+08:00", value: "4.0", time_precision: "minute"};
   const dayOnly = {timestamp: "2026-10-30T00:00:00+08:00", value: "1.5", time_precision: "day"};
@@ -360,6 +371,56 @@ test("expanded charts show the complete window with value and report-time labels
   assert.match(expanded.textContent, /不代表實際採檢時間/);
   const body = descendants(expanded).find(node => node.tagName === "tbody");
   assert.equal(body.children.length, 8);
+});
+
+test("deferred trends fetch the full window only on expansion and reuse its in-memory cache", async () => {
+  const points = Array.from({length: 8}, (_, index) => ({timestamp: `2026-10-${String(index + 1).padStart(2, "0")}T08:00:00+08:00`, time: `10/${String(index + 1).padStart(2, "0")} 08:00`, value: String(index + 1), numeric: index + 1, time_precision: "minute"}));
+  const complete = {id: "trend-4", label: "CRP", group: "chemistry", unit: "mg/L", chartable: true, all_values: points, values: points.slice(-5), latest_known: points[7], point_count: 8, unknown_values: [], unknown_count: 0};
+  const browser = await browserHarness((url, _body, server) => {
+    if (url === "/api/state" && !server.overview) server.overview = {trends: [{...complete, deferred: true, all_values: []}], report_details: [], sources: []};
+    if (url === "/api/trend_detail") return {trend: complete};
+  });
+  assert.ok(!browser.requests.some(request => request.url === "/api/trend_detail"));
+  const expand = browser.nodes.find(node => node.className === "trend-toggle quiet");
+  assert.equal(expand.textContent, "8 筆 · 展開");
+  await expand.dispatch("click");
+  assert.deepEqual(browser.requests.find(request => request.url === "/api/trend_detail").body, {epoch: 4, trend_id: "trend-4"});
+  const svg = browser.nodes.find(node => node.tagName === "svg");
+  assert.equal(descendants(svg).filter(node => node.tagName === "circle").length, 8);
+  const body = descendants(browser.nodes.find(node => node.className === "trend-expanded")).find(node => node.tagName === "tbody");
+  assert.equal(body.children.length, 8);
+  await expand.dispatch("click"); await expand.dispatch("click");
+  const filter = browser.doc.getElementById("lab-filter"); filter.value = "CRP"; await filter.dispatch("input");
+  const rebuiltExpand = browser.nodes.filter(node => node.className === "trend-toggle quiet").at(-1);
+  await rebuiltExpand.dispatch("click");
+  assert.equal(browser.requests.filter(request => request.url === "/api/trend_detail").length, 1);
+});
+
+test("deferred counts are not mistaken for the five displayed unknown-time samples", async () => {
+  const samples = Array.from({length: 5}, (_, index) => ({value: String(index), timestamp: ""}));
+  const browser = await browserHarness((url, _body, server) => {
+    if (url === "/api/state" && !server.overview) server.overview = {trends: [{id: "trend-1", label: "CRP", group: "chemistry", unit: "mg/L", deferred: true, all_values: [], values: [], unknown_values: samples, unknown_count: 73, point_count: 73, latest_known: null}], report_details: [], sources: []};
+  });
+  const overview = browser.doc.getElementById("overview");
+  assert.match(overview.textContent, /73 筆時間未明/);
+  assert.match(overview.textContent, /73 筆 · 展開/);
+  assert.doesNotMatch(overview.textContent, /5 筆時間未明/);
+});
+
+test("a trend response from the previous snapshot is discarded after reload", async () => {
+  let resolveTrend;
+  const browser = await browserHarness((url, _body, server) => {
+    if (url === "/api/state" && !server.overview) server.overview = {trends: [{id: "trend-1", label: "CRP", group: "chemistry", unit: "mg/L", deferred: true, all_values: [], values: [], point_count: 2}], report_details: [], sources: []};
+    if (url === "/api/trend_detail") return new Promise(resolve => { resolveTrend = resolve; });
+  });
+  const expand = browser.nodes.find(node => node.className === "trend-toggle quiet"), content = browser.nodes.find(node => node.className === "trend-expanded");
+  const pending = expand.dispatch("click"); await browser.settle();
+  browser.server.epoch = 5; browser.server.overview = {trends: [], report_details: [], sources: []};
+  await browser.poll();
+  resolveTrend({trend: {label: "OLD SNAPSHOT RESULT", all_values: [{value: "OLD SNAPSHOT RESULT"}]}});
+  await pending;
+  assert.doesNotMatch(content.textContent, /OLD SNAPSHOT RESULT/);
+  assert.doesNotMatch(browser.doc.getElementById("overview").textContent, /OLD SNAPSHOT RESULT/);
 });
 
 test("rare assays can be found through all locally loaded report bodies beyond the display page", async () => {

@@ -41,11 +41,12 @@
     return points;
   }
   function trendPresentation(row) {
-    const all = row.all_values || row.values || [];
+    const all = row.all_values && row.all_values.length ? row.all_values : row.values || [];
     const hasTime = point => Number.isFinite(Date.parse(point.timestamp || ""));
     const known = (row.values || []).filter(hasTime).sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
     const allKnown = all.filter(hasTime).sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
     const unknown = row.unknown_values || all.filter(point => !hasTime(point));
+    const unknownCount = Number.isSafeInteger(row.unknown_count) && row.unknown_count >= 0 ? row.unknown_count : unknown.length;
     // A present null is deliberate (for example conflicting values at the same time).
     // Only old DTOs that omit the field may infer a latest known observation.
     const latest = Object.prototype.hasOwnProperty.call(row, "latest_known")
@@ -62,7 +63,7 @@
     const separators = known.map((point, index) => !index ? "" : !hasTimeConflict && Date.parse(point.timestamp) > Date.parse(known[index - 1].timestamp) ? "→" : "/");
     const latestConflict = Object.prototype.hasOwnProperty.call(row, "latest_known") && latest === null && allKnown.length > 0;
     const lastKnownTime = allKnown.length ? allKnown[allKnown.length - 1].time || "" : "";
-    return {known, unknown, latest, separators, hasConflicts, hasTimeConflict, latestConflict, lastKnownTime};
+    return {known, unknown, unknownCount, latest, separators, hasConflicts, hasTimeConflict, latestConflict, lastKnownTime};
   }
   function sortedTrendRows(rows, query) {
     const tokens = String(query || "").trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
@@ -126,7 +127,7 @@
   let preview = null, previewWorkspace = "", previewMode = "send", browserReport = null;
   let developer = null, promptSelection = "rounding", developerDirty = false;
   let clipboardValue = null, clipboardTimer = null;
-  const knownJobs = new Set(), adoptAfterJobs = new Set(), transformedDrafts = new Map(), sourceCache = new Map();
+  const knownJobs = new Set(), adoptAfterJobs = new Set(), transformedDrafts = new Map(), sourceCache = new Map(), trendCache = new Map();
   const workspaces = {};
   const workflowLabels = {rounding: "查房整理", admission: "Admission Note", qa: "自由提問", emergency: "急症處置"};
   const answerLabels = {idle: "尚未生成", running: "生成中 · 目前內容仍可能不完整", complete: "生成完成 · AI 草稿請核對", incomplete: "生成中斷 · 內容不完整", cancelled: "已停止 · 內容不完整"};
@@ -212,7 +213,7 @@
     $("profile-summary").replaceChildren(); $("model-catalog").replaceChildren();
     setText("selected-patient", "資料已清除"); setText("snapshot", ""); setText("notice-text", ""); setText("status", ""); setText("list-status", "");
     renderedPatients = ""; renderedOverview = ""; renderedProfiles = "";
-    state = null; developer = null; browserReport = null; knownJobs.clear(); adoptAfterJobs.clear(); transformedDrafts.clear(); sourceCache.clear();
+    state = null; developer = null; browserReport = null; knownJobs.clear(); adoptAfterJobs.clear(); transformedDrafts.clear(); sourceCache.clear(); trendCache.clear();
     $("copy-text").value = ""; if ($("copy-dialog").open) $("copy-dialog").close();
     $("app-shell").hidden = true; $("connection-screen").hidden = false;
     setText("connection-title", title || "重新開啟 WardLens"); setText("connection-message", message || "請從 WardLens 控制視窗按「開啟工作台」。");
@@ -445,22 +446,34 @@
       if (!values.length) chain.append(document.createTextNode("未提供"));
       trend.append(chain);
       if (presentation.hasConflicts) trend.append(element("span", "時間或數值衝突", "trend-flag warning"));
-      if (presentation.unknown.length) trend.append(element("span", (presentation.known.length ? "另有 " : "") + presentation.unknown.length + " 筆時間未明", "trend-flag warning"));
-      const detailsCell = element("td"), count = (row.all_values || row.values || []).length;
+      if (presentation.unknownCount) trend.append(element("span", (presentation.known.length ? "另有 " : "") + presentation.unknownCount + " 筆時間未明", "trend-flag warning"));
+      const detailsCell = element("td"), count = Number.isSafeInteger(row.point_count) && row.point_count >= 0 ? row.point_count : (row.all_values || row.values || []).length;
       const detailRow = element("tr", null, "trend-expanded-row"), detailCell = element("td"), content = element("div", null, "trend-expanded"); detailCell.colSpan = 4; detailRow.hidden = true;
-      let initialized = false;
-      const toggle = button(count + " 筆 · 展開", null, () => {
+      let initialized = false, pending = false;
+      const toggle = button(count + " 筆 · 展開", null, async () => {
         detailRow.hidden = !detailRow.hidden; toggle.setAttribute("aria-expanded", String(!detailRow.hidden)); toggle.textContent = count + " 筆 · " + (detailRow.hidden ? "展開" : "收合");
         toggle.setAttribute("aria-label", (detailRow.hidden ? "展開 " : "收合 ") + row.label + " 的 " + count + " 筆完整紀錄");
-        if (!detailRow.hidden && !initialized) {
-          initialized = true;
-          content.append(element("h4", row.label + (row.specimen ? " · " + row.specimen : "")));
-          const chart = trendChart(row); if (chart) content.append(chart);
-          content.append(element("p", [row.span, row.reference ? "參考範圍：" + row.reference : "", row.note].filter(Boolean).join(" · "), "muted"));
-          if (row.time_basis === "report") content.append(element("p", "時間來自報告日期，不代表實際採檢時間。", "muted"));
+        if (detailRow.hidden || initialized || pending || !state) return;
+        const epoch = state.epoch; pending = true;
+        content.replaceChildren(element("p", "正在開啟完整趨勢…", "muted"));
+        try {
+          let complete = row;
+          if (row.deferred) {
+            const cacheKey = epoch + ":" + row.id;
+            if (!trendCache.has(cacheKey)) trendCache.set(cacheKey, action("trend_detail", {epoch, trend_id: row.id}).then(result => result.trend).catch(error => { trendCache.delete(cacheKey); throw error; }));
+            complete = await trendCache.get(cacheKey);
+          }
+          if (!alive || !state || state.epoch !== epoch || !detailRow.isConnected) return;
+          if (!complete) throw new Error("尚未取得完整趨勢，請收合後重試。");
+          content.replaceChildren(element("h4", complete.label + (complete.specimen ? " · " + complete.specimen : "")));
+          const chart = trendChart(complete); if (chart) content.append(chart);
+          content.append(element("p", [complete.span, complete.reference ? "參考範圍：" + complete.reference : "", complete.note].filter(Boolean).join(" · "), "muted"));
+          if (complete.time_basis === "report") content.append(element("p", "時間來自報告日期，不代表實際採檢時間。", "muted"));
           if (!chart) content.append(element("p", "以表格保留原值；比較符號、定性結果或不確定的時間不連成折線。", "muted"));
-          content.append(observationTable(row));
-        }
+          content.append(observationTable(complete)); initialized = true;
+        } catch (error) {
+          if (alive && state && state.epoch === epoch && detailRow.isConnected) content.replaceChildren(element("p", (error.message || "完整趨勢讀取失敗。") + " 請收合後重試。", "warning"));
+        } finally { pending = false; }
       }, "trend-toggle quiet");
       toggle.setAttribute("aria-expanded", "false"); toggle.setAttribute("aria-label", "展開 " + row.label + " 的 " + count + " 筆完整紀錄");
       detailsCell.append(toggle); tr.append(label, last, trend, detailsCell); body.append(tr); detailCell.append(content); detailRow.append(detailCell); body.append(detailRow);
@@ -557,7 +570,7 @@
     const signature = JSON.stringify([state.epoch, view]);
     if (signature === renderedOverview) return;
     renderedOverview = signature;
-    sourceCache.clear();
+    sourceCache.clear(); trendCache.clear();
     const target = $("overview");
     if (!view) { const empty = element("div", null, "empty-state"); empty.append(element("h2", state.selected_id ? "載入資料後，先看今天的變化" : "先選取病人"), element("p", "檢驗表、待辦與原始來源會顯示在這裡。未載入不代表沒有異常。")); target.replaceChildren(empty); return; }
     const nodes = [];
@@ -571,7 +584,7 @@
         cell.append(element("div", row.label, "vital-label"), value, element("div", latest && latest.time ? latest.time : presentation.latestConflict ? presentation.lastKnownTime || "時間或數值衝突" : "量測時間未辨識", "vital-time"));
         if (presentation.hasConflicts && !presentation.latestConflict) cell.append(element("div", presentation.hasTimeConflict ? "時間或數值衝突，請核對" : "同時點數值衝突，請核對", "vital-time warning"));
         if (presentation.hasConflicts && row.note) cell.append(element("div", row.note, "vital-time warning"));
-        if (presentation.unknown.length) cell.append(element("div", latest ? "時間未明另有：" + presentation.unknown.map(point => point.value).join(" / ") : "請展開來源核對時間", "vital-time warning"));
+        if (presentation.unknownCount) cell.append(element("div", (latest ? "另有" : "") + "時間未明 " + presentation.unknownCount + " 筆；請展開核對" + (presentation.unknownCount > presentation.unknown.length ? "（此處僅列部分）" : ""), "vital-time warning"));
         strip.append(cell);
       }
       nodes.push(strip);
@@ -682,7 +695,7 @@
     const jobNeedsAdoption = processJob(state.job), forceDrafts = epochChanged || jobNeedsAdoption;
     if (epochChanged) {
       closePreview(); for (const key of Object.keys(workspaces)) clearWorkspaceLocal(key);
-      transformedDrafts.clear(); sourceCache.clear();
+      transformedDrafts.clear(); sourceCache.clear(); trendCache.clear();
       renderedOverview = ""; renderedPatients = "";
     }
     if (oldSettings && oldSettings !== JSON.stringify(state.settings)) closePreview();

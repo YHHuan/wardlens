@@ -48,7 +48,7 @@ _ALIASES = {
 }
 _DATE_LABELS = {_key(item) for item in ("Date", "Datetime", "日期", "日期／時間", "採檢日期", "採檢時間", "量測時間", "檢驗日期", "檢驗時間", "報告日期", "報告時間", "Collection date", "Collection time", "Report date", "Report time")}
 _TIME_LABELS = {_key(item) for item in ("Time", "時間", "時分")}
-_NAME_LABELS = {_key(item) for item in ("Test", "Test name", "Item", "Analyte", "項目", "項目名稱", "檢驗項目", "檢驗名稱")}
+_NAME_LABELS = {_key(item) for item in ("Test", "Test name", "Name", "Item", "Analyte", "Analyte name", "項目", "項目名稱", "檢驗項目", "檢驗名稱")}
 _VALUE_LABELS = {_key(item) for item in ("Value", "Result", "結果", "數值", "檢驗值", "檢驗結果")}
 _UNIT_LABELS = {_key(item) for item in ("Unit", "Units", "單位")}
 _SPECIMEN_LABELS = {_key(item) for item in ("Specimen", "Specimen type", "Sample type", "檢體", "檢體種類", "檢體類別")}

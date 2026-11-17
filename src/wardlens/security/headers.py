@@ -150,6 +150,12 @@ def identifier_spans(text: str) -> tuple[HeaderSpan, ...]:
         delimiter, cells = _cells(line)
         labels = [_normalized(line[a:b]) for a, b in cells]
         identity_columns = {j for j, label in enumerate(labels) if label in _IDENTITY}
+        # Bare Name in a result/unit table names the assay. Explicit Patient
+        # Name/MRN columns remain identifying even next to clinical results.
+        result_labels = {"result", "value", "結果", "數值", "檢驗結果"}
+        unit_labels = {"unit", "units", "單位", "reference", "referencerange", "參考值", "參考區間"}
+        if set(labels) & result_labels and set(labels) & unit_labels:
+            identity_columns = {j for j in identity_columns if labels[j] != "name"}
         recognized = sum(label in _ALL_LABELS for label in labels)
         all_known = recognized == sum(bool(label) for label in labels)
         # Allow rare/unknown test headings in a table. Distinguish a header from

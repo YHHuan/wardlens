@@ -391,3 +391,10 @@ def test_empty_final_column_remains_aligned_through_header_cleanup():
     view = build_rounding_view(bundle_of("Test\tResult\tUnit\nRare assay\tPositive\t", "report"))
     assert view["trends"][0]["unknown_values"][0]["value"] == "Positive"
     assert view["sources"][0]["sections"][0]["rows"][0] == ["Rare assay", "Positive", ""]
+
+
+def test_bare_assay_name_header_and_unknown_assays_survive_administrative_cleanup():
+    text = "Name\tResult\tUnit\nUncommon synthetic assay\t8.2\tmg/L\nAnother assay\tPositive\t"
+    view = build_rounding_view(bundle_of(text, "report"))
+    assert {row["label"] for row in view["trends"]} == {"Uncommon synthetic assay", "Another assay"}
+    assert view["sources"][0]["sections"][0]["headers"] == ["Name", "Result", "Unit"]

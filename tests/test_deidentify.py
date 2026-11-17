@@ -211,3 +211,10 @@ def test_specific_known_location_is_still_redacted_without_a_field_label() -> No
     assert "D101-01" not in result.text
     assert "[KNOWN_LOCATION_REMOVED]" in result.text
     assert "Cr 1.01 mg/dL" in result.text
+def test_result_name_column_is_analyte_but_explicit_patient_name_column_is_removed():
+    from wardlens.security.deidentify import clean_clinical_headers
+
+    raw = "Patient Name\tName\tResult\tUnit\nPrivate Person\tUncommon assay\t8.2\tmg/L"
+    cleaned, _ = clean_clinical_headers(raw)
+    assert "Private Person" not in cleaned and "Patient Name" not in cleaned
+    assert cleaned == "Name\tResult\tUnit\nUncommon assay\t8.2\tmg/L"

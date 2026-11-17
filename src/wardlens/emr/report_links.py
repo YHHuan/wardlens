@@ -428,6 +428,11 @@ def report_content(soup: BeautifulSoup) -> Tag | BeautifulSoup | None:
                 )
                 for label in labels
             )
+            if any(label.casefold() == "name" for label in labels) and any(
+                re.fullmatch(r"(?:units?|reference(?: range)?|單位|參考值|參考區間)", label, re.I)
+                for label in labels
+            ):
+                has_test = True
             if has_test and has_result:
                 for unwanted in soup.find_all(["form", "nav", "script", "style"]):
                     unwanted.decompose()

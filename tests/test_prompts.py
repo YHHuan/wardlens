@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
 from wardlens.emr.demo import DemoEMRAdapter
 from wardlens.llm.prompts import PromptBuilder, PromptEnvelope, PromptFormatError
+from wardlens.models import PatientBundle, PatientSummary, SourceRecord
 from wardlens.services.ai import AIWorkflowService
+from wardlens.services.history import TRUNCATION_MARKER
 
 
 def _bundle():
@@ -105,3 +109,63 @@ def test_edited_context_still_redacts_known_patient_identifiers():
     )
     assert "測試甲" not in prepared.preview.text and "90000001" not in prepared.preview.text
     assert "creatinine 1.8 mg/dL" in prepared.preview.text
+
+
+def test_bundle_and_editor_clean_admin_before_allocation_without_mutating_raw_sources():
+    profile = "姓名：Jane Example\n病歷號：87654321\n出生日期：1980-01-02\n" * 3000
+    records = [
+        SourceRecord(
+            source_type="report", title="Urine porphyrins | 主治醫師：黃醫師",
+            content=profile + "Test Name: PBG\nSpecimen: Urine\nResult: 18.2 mg/g Cr\nCollected: 2026-11-16 09:10\nMethod: LC-MS/MS",
+            source_url="https://private.example.invalid/?histno=87654321",
+            observed_at=datetime.fromisoformat("2026-11-16T10:00:00+08:00"),
+        ),
+        SourceRecord(source_type="lab_rare", title="Uncommon test", content="ALA 6.2 umol/L"),
+    ]
+    bundle = PatientBundle(patient=PatientSummary(histno="87654321", age="46", sex="M"), records=records)
+    builder = PromptBuilder()
+    for context in (builder._bundle_text(bundle), builder.editor_context(bundle)):
+        assert "Jane Example" not in context and "87654321" not in context
+        assert "黃醫師" not in context and "1980-01-02" not in context
+        assert "private.example.invalid" not in context
+        assert "Result: 18.2 mg/g Cr" in context and "ALA 6.2 umol/L" in context
+        assert "Test Name: PBG" in context and "Specimen: Urine" in context
+        assert "2026-11-16 09:10" in context
+        assert "Method: LC-MS/MS" in context
+        assert TRUNCATION_MARKER not in context
+    assert records[0].content.startswith(profile)
+    assert "黃醫師" in records[0].title
+
+
+def test_many_sources_are_fairly_allocated_with_explicit_truncation():
+    records = [
+        SourceRecord(source_type="report", title=f"Assay {index}", content=f"Important assay {index}\n" + "result unit reference\n" * 500)
+        for index in range(200)
+    ]
+    bundle = PatientBundle(patient=PatientSummary(histno=""), records=records)
+    builder = PromptBuilder()
+    for context in (builder._bundle_text(bundle), builder.editor_context(bundle)):
+        for source_id, _ in bundle.source_map():
+            assert source_id in context
+        assert "Important assay 0" in context and "Important assay 199" in context
+        assert TRUNCATION_MARKER in context and "200 份來源節錄" in context
+        assert len(context) < builder.MAX_CONTEXT_CHARACTERS
+
+
+def test_metadata_and_escaped_text_are_inside_total_context_bound():
+    records = [
+        SourceRecord(
+            source_type="report", title="特殊檢驗" * 60, status="已完成" * 40,
+            content=f"Assay {index}\n" + "<中文 & result>" * 40,
+        )
+        for index in range(1700)
+    ]
+    bundle = PatientBundle(patient=PatientSummary(histno=""), records=records, warnings=["synthetic warning &" * 2000])
+    builder = PromptBuilder()
+    for context in (builder._bundle_text(bundle), builder.editor_context(bundle)):
+        assert len(context) < builder.MAX_CONTEXT_CHARACTERS
+        assert len(context.encode("utf-8")) < 1_500_000
+        assert TRUNCATION_MARKER in context and "份來源未納入" in context
+        assert "SRC-001" in context and "SRC-1700" in context
+    prompt = builder._bundle_text(bundle)
+    assert prompt.count("<clinical_source ") == prompt.count("</clinical_source>")

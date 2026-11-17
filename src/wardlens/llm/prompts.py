@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import html
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib.resources import files
 
 from wardlens.models import EMR_TIMEZONE, PatientBundle
-from wardlens.services.history import bounded_source, coverage_summary, window_description
+from wardlens.security.deidentify import clean_clinical_headers
+from wardlens.services.history import (
+    TRUNCATION_MARKER,
+    bounded_source,
+    coverage_summary,
+    window_description,
+)
 
 
 class PromptFormatError(ValueError):
@@ -56,6 +62,11 @@ class PromptEnvelope:
 
 
 class PromptBuilder:
+    # Includes source metadata and escaped text, not just raw record bodies.
+    # Leave room for system/question text in the 2 MB local HTTP request limit.
+    MAX_CONTEXT_CHARACTERS = 400000
+    _HEADER_RESERVE = 10000
+    _BODY_BUDGET = 240000
     _prompt_files = {
         "rounding": "rounding_review_zh_tw.txt",
         "admission": "admission_note_en.txt",
@@ -124,8 +135,8 @@ class PromptBuilder:
         header = [
             "<patient_context>",
             "Patient label: P1 (request-local, not derived from an identifier)",
-            f"Age: {patient.age or 'not provided'}",
-            f"Sex: {patient.sex or 'not provided'}",
+            f"Age: {self._escape_source(patient.age[:64] or 'not provided')}",
+            f"Sex: {self._escape_source(patient.sex[:64] or 'not provided')}",
             f"Source count: {len(bundle.records)}",
             window_description(bundle, relative=True),
             "</patient_context>",
@@ -133,32 +144,10 @@ class PromptBuilder:
         if bundle.warnings:
             header.append(
                 "<source_warnings>\n"
-                + self._escape_source("\n".join(bundle.warnings))
+                + bounded_source(self._escape_source("\n".join(bundle.warnings)), 6000)
                 + "\n</source_warnings>"
             )
-        source_blocks: list[str] = []
-        allocations = self._source_allocations(bundle)
-        anchor = bundle.fetched_at.astimezone(EMR_TIMEZONE).date()
-        for index, (source_id, record) in enumerate(bundle.source_map()):
-            content = bounded_source(record.content, allocations[index])
-            if record.source_type.startswith("lab_") or record.source_type in {
-                "report",
-                "report_index", "vital_signs",
-            }:
-                content = coverage_summary(record, relative_to=anchor) + "\n" + content
-            when = "time not established"
-            if record.observed_at is not None:
-                day_delta = (record.observed_at.astimezone(EMR_TIMEZONE).date() - anchor).days
-                when = "D0" if day_delta == 0 else f"D{day_delta:+d}"
-            metadata = (
-                f"id={source_id}; type={record.source_type}; title={record.title}; "
-                f"observed={when}; status={record.status or 'not stated'}"
-            )
-            source_blocks.append(
-                f"<clinical_source {html.escape(metadata, quote=True)}>\n"
-                f"{self._escape_source(content)}\n"
-                "</clinical_source>"
-            )
+        source_blocks = self._context_sources(bundle, editor=False)
         if not source_blocks:
             source_blocks.append(
                 '<clinical_source id="SRC-000">No readable clinical source was provided.</clinical_source>'
@@ -166,15 +155,15 @@ class PromptBuilder:
         return "\n".join(header + source_blocks)
 
     @staticmethod
-    def _source_allocations(bundle: PatientBundle) -> list[int]:
+    def _allocate_sizes(contents: list[str], budget: int) -> list[int]:
         # Fair-share allocation prevents earlier notes from crowding out labs.
-        allocations = [0] * len(bundle.records)
-        remaining = 240000
-        pending = set(range(len(bundle.records)))
+        allocations = [0] * len(contents)
+        remaining = max(0, budget)
+        pending = set(range(len(contents)))
         while pending and remaining:
             share = max(1, remaining // len(pending))
             for i in sorted(pending):
-                need = min(len(bundle.records[i].content), 120000) - allocations[i]
+                need = min(len(contents[i]), 120000) - allocations[i]
                 take = min(need, share, remaining)
                 allocations[i] += take
                 remaining -= take
@@ -182,29 +171,92 @@ class PromptBuilder:
                     pending.remove(i)
         return allocations
 
+    @classmethod
+    def _source_allocations(cls, bundle: PatientBundle) -> list[int]:
+        contents = [clean_clinical_headers(record.content)[0] for record in bundle.records]
+        return cls._allocate_sizes(contents, cls._BODY_BUDGET)
+
+    def _context_sources(self, bundle: PatientBundle, *, editor: bool) -> list[str]:
+        """Bound the entire rendered context and disclose every omitted excerpt.
+
+        The usual case retains every source with a fair share of body space.
+        Only if metadata alone exceeds the total budget, distribute excerpts
+        across the source list and clearly report the missing source count. Raw
+        fetched reports remain in the local bundle; nothing here changes them.
+        """
+        sources: list[tuple[str, str, str]] = []
+        anchor = bundle.fetched_at.astimezone(EMR_TIMEZONE).date()
+        metadata_shortened = False
+        for source_id, raw_record in bundle.source_map():
+            content, _ = clean_clinical_headers(raw_record.content)
+            title, _ = clean_clinical_headers(raw_record.title)
+            status, _ = clean_clinical_headers(raw_record.status)
+            metadata_shortened |= len(title) > 200 or len(status) > 80 or len(raw_record.source_type) > 64
+            title = title[:200] + ("…" if len(title) > 200 else "")
+            status = status[:80] + ("…" if len(status) > 80 else "")
+            record = replace(raw_record, content=content, title=title, status=status)
+            coverage = ""
+            if record.source_type.startswith("lab_") or record.source_type in {"report", "report_index", "vital_signs"}:
+                coverage = coverage_summary(record, relative_to=None if editor else anchor) + "\n"
+            if editor:
+                when = record.observed_at.astimezone(EMR_TIMEZONE).strftime("%Y-%m-%d %H:%M") if record.observed_at else "來源時間未建立"
+                prefix = f"\n[{source_id}] {title}｜{record.source_type[:64]}｜{when}｜{status or '狀態未建立'}\n{coverage}"
+                sources.append((prefix, content, ""))
+            else:
+                when = "time not established"
+                if record.observed_at:
+                    day_delta = (record.observed_at.astimezone(EMR_TIMEZONE).date() - anchor).days
+                    when = "D0" if day_delta == 0 else f"D{day_delta:+d}"
+                metadata = f"id={source_id}; type={record.source_type[:64]}; title={title}; observed={when}; status={status or 'not stated'}"
+                prefix = f"<clinical_source {html.escape(metadata, quote=True)}>\n{self._escape_source(coverage)}"
+                sources.append((prefix, self._escape_source(content), "\n</clinical_source>"))
+
+        maximum = self.MAX_CONTEXT_CHARACTERS - self._HEADER_RESERVE
+        total_sources = len(sources)
+        overhead = sum(len(prefix) + len(suffix) + 1 for prefix, _, suffix in sources)
+        # Reserve half the source budget for clinical content before discarding
+        # any metadata. This branch is for thousands of unusually large titles.
+        if overhead > maximum:
+            count = max(1, int(total_sources * (maximum // 2) / overhead))
+            indices = [round(i * (total_sources - 1) / max(1, count - 1)) for i in range(count)]
+            sources = [sources[index] for index in indices]
+            overhead = sum(len(prefix) + len(suffix) + 1 for prefix, _, suffix in sources)
+        allocations = self._allocate_sizes(
+            [content for _, content, _ in sources], min(self._BODY_BUDGET, maximum - overhead)
+        )
+        blocks: list[str] = []
+        truncated_count = 0
+        omitted_content = 0
+        for (prefix, content, suffix), limit in zip(sources, allocations, strict=True):
+            if len(content) <= limit:
+                excerpt = content
+            elif limit >= len(TRUNCATION_MARKER) + 2:
+                excerpt = bounded_source(content, limit)
+                truncated_count += 1
+            else:
+                excerpt = ""
+                omitted_content += 1
+            blocks.append(prefix + excerpt + suffix)
+        if truncated_count or omitted_content or len(sources) < total_sources or metadata_shortened:
+            blocks.append(
+                f"{TRUNCATION_MARKER}\n"
+                f"AI 輸入額度：{truncated_count} 份來源節錄、{omitted_content} 份內容未納入、"
+                f"{total_sources - len(sources)} 份來源未納入；標題過長時亦節錄。"
+                "完整擷取原文仍在本機；不得據此宣稱檢驗／報告已全部涵蓋。"
+            )
+        return blocks
+
     def editor_context(self, bundle: PatientBundle) -> str:
         """Human-editable chart snapshot without system prompts or XML scaffolding."""
         lines = [
             "病人資料草稿（本機可編輯；編輯不會寫回 EMR，引用仍須核對原始來源）",
             f"資料截止：{bundle.fetched_at.astimezone(EMR_TIMEZONE):%Y-%m-%d %H:%M %Z}",
-            f"Age: {bundle.patient.age or 'not provided'}; Sex: {bundle.patient.sex or 'not provided'}",
+            f"Age: {bundle.patient.age[:64] or 'not provided'}; Sex: {bundle.patient.sex[:64] or 'not provided'}",
             window_description(bundle),
         ]
         if bundle.warnings:
-            lines.extend(["", "擷取警告：", *bundle.warnings])
-        allocations = self._source_allocations(bundle)
-        for index, (source_id, record) in enumerate(bundle.source_map()):
-            content = bounded_source(record.content, allocations[index])
-            when = (
-                record.observed_at.astimezone(EMR_TIMEZONE).strftime("%Y-%m-%d %H:%M")
-                if record.observed_at else "來源時間未建立"
-            )
-            lines.extend([
-                "", f"[{source_id}] {record.title}｜{record.source_type}｜{when}｜{record.status or '狀態未建立'}",
-            ])
-            if record.source_type.startswith("lab_") or record.source_type in {"report", "report_index", "vital_signs"}:
-                lines.append(coverage_summary(record))
-            lines.append(content)
+            lines.extend(["", "擷取警告：", bounded_source("\n".join(bundle.warnings), 6000)])
+        lines.extend(self._context_sources(bundle, editor=True))
         if not bundle.records:
             lines.append("未取得可讀資料，不代表沒有異常。")
         return "\n".join(lines)

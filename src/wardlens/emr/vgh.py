@@ -5,6 +5,7 @@ import re
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
@@ -15,6 +16,7 @@ from bs4 import BeautifulSoup, Tag
 
 from wardlens.config import AppSettings
 from wardlens.emr.base import (
+    EMRCancelled,
     EMRError,
     IncompleteFetchError,
     InterfaceChangedError,
@@ -22,6 +24,15 @@ from wardlens.emr.base import (
     RequestBudgetExceeded,
 )
 from wardlens.emr.parsers import PatientListParser, clean_text, same_origin_https, table_to_tsv
+from wardlens.emr.report_links import (
+    canonical_url,
+    lab_categories,
+    pagination_urls,
+    report_content,
+    report_detail_url,
+    same_report_identity,
+    same_result_scope,
+)
 from wardlens.models import (
     EMR_TIMEZONE,
     PatientBundle,
@@ -47,12 +58,13 @@ class _FetchedPage:
 class _RateLimiter:
     """Pace every EMR request and enforce a rolling one-minute ceiling."""
 
-    def __init__(self, delay_seconds: float, max_per_minute: int) -> None:
+    def __init__(self, delay_seconds: float, max_per_minute: int, cancel_event=None) -> None:
         self.max_per_minute = max(1, min(max_per_minute, 120))
         self.delay_seconds = max(0.2, delay_seconds, 60.0 / self.max_per_minute)
         self._last_request = 0.0
         self._recent: deque[float] = deque()
         self._lock = threading.Lock()
+        self._cancel_event = cancel_event
 
     def wait(self) -> None:
         with self._lock:
@@ -70,7 +82,11 @@ class _RateLimiter:
                     self._last_request = now
                     self._recent.append(now)
                     return
-                time.sleep(wait_for)
+                if self._cancel_event is not None:
+                    if self._cancel_event.wait(wait_for):
+                        raise EMRCancelled("已停止載入；已取得的資料將保留。")
+                else:
+                    time.sleep(wait_for)
 
 
 class _RequestBudget:
@@ -94,19 +110,43 @@ class VGHReadOnlyAdapter:
     login_page = "https://eip.vghtpe.gov.tw/login.php"
     qemr = "https://web9.vghtpe.gov.tw/emr/qemr/qemr.cfm"
     allowed_hosts = {"eip.vghtpe.gov.tw", "web9.vghtpe.gov.tw"}
+    max_bundle_requests = 1000
+    max_result_pages = 200
+    max_lab_categories = 200
 
     def __init__(
-        self, settings: AppSettings | None = None, session: requests.Session | None = None
+        self,
+        settings: AppSettings | None = None,
+        session: requests.Session | None = None,
+        *,
+        cancel_event=None,
+        progress: Callable[[str], None] | None = None,
     ) -> None:
         self.settings = settings or AppSettings()
         self.session = session or requests.Session()
         self._configure_session(self.session)
         self._logged_in = False
+        self._cancel_event = cancel_event
+        self._progress = progress
         self._limiter = _RateLimiter(
             self.settings.request_delay_seconds,
             self.settings.max_requests_per_minute,
+            cancel_event,
         )
         self._parser = PatientListParser()
+        self._lab_categories: dict[str, str] = {}
+        self._lab_navigation: dict[str, tuple[list[str], int, str]] = {}
+        self._lab_navigation_rejected = 0
+        self._active_budget: _RequestBudget | None = None
+        self._result_histno = ""
+
+    def _check_cancelled(self) -> None:
+        if self._cancel_event is not None and self._cancel_event.is_set():
+            raise EMRCancelled("已停止載入；已取得的資料將保留。")
+
+    def _notify(self, message: str) -> None:
+        if self._progress:
+            self._progress(message)
 
     @property
     def logged_in(self) -> bool:
@@ -297,101 +337,235 @@ class VGHReadOnlyAdapter:
         self._require_login()
         months = max(1, min(int(self.settings.lab_lookback_months), 12))
         bundle = PatientBundle(patient=patient, lookback_months=months)
-        budget = _RequestBudget(maximum=40)
-        self._enter_patient_context(patient, budget)
-        case_no = patient.case_no or self._resolve_case_no(patient, budget)
-        lookback = str(months)
-        specs = [
-            ("profile", "基本資料", self._url("findPba", histno=patient.histno), None, None),
-            (
-                "admission_note",
-                "最新入院病歷",
-                self._url("findAdm", histno=patient.histno),
-                "admnote",
-                None,
-            ),
-            (
-                "progress_note",
-                "近期 Progress Notes",
-                self._url("findPrg", histno=patient.histno, caseno=case_no),
-                None,
-                None,
-            ),
-            ("medication", "目前用藥", self._url("findUd", histno=patient.histno), None, None),
-            (
-                "lab_chemistry",
-                f"生化趨勢（近 {lookback} 個月）",
-                self._url("findResd", resdtype="DCHEM", histno=patient.histno, resdtmonth=lookback),
-                None,
-                "resdtable",
-            ),
-            (
-                "lab_cbc",
-                f"CBC 趨勢（近 {lookback} 個月）",
-                self._url("findResd", resdtype="DCBC", histno=patient.histno, resdtmonth=lookback),
-                None,
-                "resdtable",
-            ),
-        ]
-        if case_no:
-            # Documented in max870121/VGH_web get_TPR; current encounter only.
-            specs.insert(4, (
-                "vital_signs", "生命徵象（本次住院 TPR）",
-                self._url("findTpr", caseno=case_no), None, "tprlist",
-            ))
-        else:
-            bundle.warnings.append("未取得住院序號，未載入生命徵象 TPR；不能以病歷內舊數值代替目前生命徵象。")
+        bundle.coverage["cancelled"] = False
+        # Existing categories are seeds. Other codes must occur in returned menus.
+        self._lab_categories = {"DCHEM": "生化", "DCBC": "CBC"}
+        self._lab_navigation = {}
+        self._lab_navigation_rejected = 0
+        self._lab_attempted: set[str] = set()
+        budget = _RequestBudget(maximum=self.max_bundle_requests)
+        self._active_budget = budget
+        self._result_histno = patient.histno
         failed_types: set[str] = set()
-        for source_type, title, url, preferred_link_title, expected_id in specs:
-            try:
-                record = self._fetch_record(
-                    budget,
-                    source_type=source_type,
-                    title=title,
-                    url=url,
-                    preferred_link_title=preferred_link_title,
-                    expected_id=expected_id,
-                    patient=patient,
-                )
-                if record:
-                    bundle.add_record(record)
-                    if source_type == "vital_signs":
-                        bundle.warnings.extend(self._vital_warnings(record.content))
-                    if TRUNCATION_MARKER in record.content:
-                        bundle.warnings.append(
-                            f"{title}：超過來源容量，已標記截短；不可視為完整趨勢。"
-                        )
-                    if record.status == "empty_unverified":
-                        bundle.warnings.append(
-                            f"{title}：結構存在但沒有可讀資料列；請回原始 EMR 核對。"
-                        )
-            except LoginError:
-                raise
-            except (
-                EMRError,
-                requests.RequestException,
-                AttributeError,
-                KeyError,
-                ValueError,
-            ) as exc:
-                failed_types.add(source_type)
-                bundle.warnings.append(f"{title}：{self._safe_error(exc)}")
         try:
+            self._check_cancelled()
+            self._enter_patient_context(patient, budget)
+            case_no = patient.case_no or self._resolve_case_no(patient, budget)
+            specs = [
+                ("profile", "基本資料", self._url("findPba", histno=patient.histno), None, None),
+                (
+                    "admission_note",
+                    "最新入院病歷",
+                    self._url("findAdm", histno=patient.histno),
+                    "admnote",
+                    None,
+                ),
+                (
+                    "progress_note",
+                    "近期 Progress Notes",
+                    self._url("findPrg", histno=patient.histno, caseno=case_no),
+                    None,
+                    None,
+                ),
+                ("medication", "目前用藥", self._url("findUd", histno=patient.histno), None, None),
+            ]
+            if case_no:
+                specs.append(
+                    (
+                        "vital_signs",
+                        "生命徵象（本次住院 TPR）",
+                        self._url("findTpr", caseno=case_no),
+                        None,
+                        "tprlist",
+                    )
+                )
+            else:
+                bundle.warnings.append(
+                    "未取得住院序號，未載入生命徵象 TPR；不能以病歷內舊數值代替目前生命徵象。"
+                )
+            for source_type, title, url, preferred_link_title, expected_id in specs:
+                self._check_cancelled()
+                try:
+                    record = self._fetch_record(
+                        budget,
+                        source_type=source_type,
+                        title=title,
+                        url=url,
+                        preferred_link_title=preferred_link_title,
+                        expected_id=expected_id,
+                        patient=patient,
+                    )
+                    if record:
+                        self._add_checked_record(bundle, record)
+                        if source_type == "vital_signs":
+                            bundle.warnings.extend(self._vital_warnings(record.content))
+                    self._notify(f"已讀取 {len(bundle.records)} 項來源；接著搜尋檢驗與一般報告。")
+                except (LoginError, EMRCancelled, RequestBudgetExceeded):
+                    raise
+                except (
+                    EMRError,
+                    requests.RequestException,
+                    AttributeError,
+                    KeyError,
+                    ValueError,
+                ) as exc:
+                    failed_types.add(source_type)
+                    bundle.warnings.append(f"{title}：{self._safe_error(exc)}")
+            # Routine trends remain available if a long report load is cancelled.
+            self._fetch_lab_history(bundle, budget)
             self._fetch_report_history(bundle, budget)
-        except LoginError:
-            raise
-        except (EMRError, requests.RequestException, ValueError, AttributeError, KeyError) as exc:
-            failed_types.add("report_index")
-            bundle.warnings.append(f"歷史報告：{self._safe_error(exc)}")
-        if not bundle.records:
+            # Report menus can expose further categories absent on cumulative pages.
+            self._fetch_lab_history(bundle, budget)
+        except EMRCancelled:
+            bundle.coverage.update(
+                cancelled=True,
+                lab_categories_complete=False,
+                report_discovery_complete=False,
+                report_details_complete=False,
+            )
+            bundle.warnings.append(
+                "已取消載入；保留已取得資料，尚未完成的檢驗／報告不可視為沒有資料。"
+            )
+        except RequestBudgetExceeded as exc:
+            bundle.coverage.update(
+                lab_categories_complete=False,
+                report_discovery_complete=False,
+                report_details_complete=False,
+            )
+            bundle.warnings.append(
+                f"{self._safe_error(exc)} 已保留部分資料；檢驗／報告範圍尚未完整。"
+            )
+        finally:
+            self._active_budget = None
+            self._result_histno = ""
+        if not bundle.records and not bundle.coverage.get("cancelled"):
             raise IncompleteFetchError("沒有取得任何臨床資料；請勿把空白視為無異常。")
-        if {"lab_chemistry", "lab_cbc"}.issubset(failed_types):
-            bundle.warnings.append("兩個累積檢驗頁都未通過內容檢查；不可解讀為檢驗正常或沒有資料。")
-        if "report_index" in failed_types:
-            bundle.warnings.append("報告索引未通過內容檢查；不可解讀為沒有 pending／新報告。")
         if "vital_signs" in failed_types:
             bundle.warnings.append("生命徵象 TPR 未載入；須由床邊／護理系統補充，目前數值未知。")
+        bundle.warnings = list(dict.fromkeys(bundle.warnings))
         return bundle
+
+    @staticmethod
+    def _add_checked_record(bundle: PatientBundle, record: SourceRecord) -> None:
+        bundle.add_record(record)
+        if TRUNCATION_MARKER in record.content:
+            bundle.warnings.append(f"{record.title}：超過來源容量，已標記截短；不可視為完整趨勢。")
+        if record.status == "empty_unverified":
+            bundle.warnings.append(f"{record.title}：結構存在但沒有可讀資料列；請回原始 EMR 核對。")
+
+    def _observe_lab_categories(
+        self, soup: BeautifulSoup, page_url: str, patient: PatientSummary
+    ) -> None:
+        found, rejected = lab_categories(soup, page_url, patient.histno)
+        self._lab_navigation_rejected += rejected
+        for code, label in found.items():
+            self._lab_categories.setdefault(code, label)
+
+    def _fetch_lab_history(self, bundle: PatientBundle, budget: _RequestBudget) -> None:
+        attempted = self._lab_attempted
+        coverage = bundle.coverage
+        coverage.setdefault("lab_categories_loaded", 0)
+        coverage.setdefault("lab_categories_complete", True)
+        while pending := [code for code in self._lab_categories if code not in attempted]:
+            self._check_cancelled()
+            coverage["lab_categories_discovered"] = len(self._lab_categories)
+            if len(attempted) >= self.max_lab_categories:
+                coverage["lab_categories_complete"] = False
+                bundle.warnings.append(
+                    f"檢驗類別已達安全上限 {self.max_lab_categories} 類，仍有類別未讀取。"
+                )
+                break
+            code = pending[0]
+            attempted.add(code)
+            source_type = {"DCHEM": "lab_chemistry", "DCBC": "lab_cbc"}.get(
+                code, f"lab_{code.lower()}"
+            )
+            title = f"{self._lab_categories[code]}趨勢（近 {bundle.lookback_months} 個月）"
+            queue = deque(
+                [
+                    self._url(
+                        "findResd",
+                        resdtype=code,
+                        histno=bundle.patient.histno,
+                        resdtmonth=str(bundle.lookback_months),
+                    )
+                ]
+            )
+            seen_urls: set[str] = set()
+            seen_content: set[str] = set()
+            category_loaded = False
+            while queue:
+                self._check_cancelled()
+                url = queue.popleft()
+                key = canonical_url(url)
+                if key in seen_urls:
+                    continue
+                if len(seen_urls) >= self.max_result_pages:
+                    coverage["lab_categories_complete"] = False
+                    bundle.warnings.append(
+                        f"有檢驗類別達分頁安全上限 {self.max_result_pages} 頁，趨勢未完整。"
+                    )
+                    break
+                seen_urls.add(key)
+                try:
+                    record = self._fetch_record(
+                        budget,
+                        source_type=source_type,
+                        title=title,
+                        url=url,
+                        preferred_link_title=None,
+                        expected_id="resdtable",
+                        patient=bundle.patient,
+                    )
+                    links, rejected, fingerprint = self._lab_navigation.pop(url, ([], 0, ""))
+                    if fingerprint and fingerprint in seen_content:
+                        coverage["lab_categories_complete"] = False
+                        bundle.warnings.append(
+                            "有檢驗分頁重複回傳相同內容，已停止該分支；不能視為完整趨勢。"
+                        )
+                        continue
+                    seen_content.add(fingerprint)
+                    if record:
+                        self._add_checked_record(bundle, record)
+                        if record.status != "empty_unverified":
+                            category_loaded = True
+                        if (
+                            record.status == "empty_unverified"
+                            or TRUNCATION_MARKER in record.content
+                        ):
+                            coverage["lab_categories_complete"] = False
+                    if rejected:
+                        coverage["lab_categories_complete"] = False
+                        bundle.warnings.append(
+                            f"有 {rejected} 個檢驗分頁連結無法確認唯讀及同一範圍，已略過。"
+                        )
+                    queue.extend(link for link in links if canonical_url(link) not in seen_urls)
+                    self._notify(
+                        f"已讀取 {coverage['lab_categories_loaded']} 類檢驗；目前類別已讀 {len(seen_urls)} 頁。"
+                    )
+                except (LoginError, EMRCancelled, RequestBudgetExceeded):
+                    raise
+                except (
+                    EMRError,
+                    requests.RequestException,
+                    ValueError,
+                    AttributeError,
+                    KeyError,
+                ) as exc:
+                    coverage["lab_categories_complete"] = False
+                    bundle.warnings.append(f"檢驗類別：{self._safe_error(exc)}")
+            if category_loaded:
+                coverage["lab_categories_loaded"] += 1
+            self._notify(
+                f"已讀取 {coverage['lab_categories_loaded']}／{len(self._lab_categories)} 類檢驗。"
+            )
+        coverage["lab_categories_discovered"] = len(self._lab_categories)
+        if self._lab_navigation_rejected:
+            coverage["lab_categories_complete"] = False
+            bundle.warnings.append(
+                f"有 {self._lab_navigation_rejected} 個檢驗類別連結無法安全辨識，已略過；不能保證涵蓋所有檢驗。"
+            )
+            self._lab_navigation_rejected = 0
 
     @staticmethod
     def _vital_warnings(content: str) -> list[str]:
@@ -402,8 +576,12 @@ class VGHReadOnlyAdapter:
             "RR": r"\b(?:RR|R|respiratory rate)\b|呼吸",
             "SpO₂": r"\bSpO[2₂]\b|血氧|oxygen saturation",
         }
-        missing = [name for name, pattern in labels.items() if not re.search(pattern, content, re.I)]
-        warnings = ["TPR 是本次住院來源的擷取快照，不保證整段住院完整；各筆以表中量測時間為準，不代表即時生命徵象。氧氣裝置／流量與缺漏欄位須核對床邊。"]
+        missing = [
+            name for name, pattern in labels.items() if not re.search(pattern, content, re.I)
+        ]
+        warnings = [
+            "TPR 是本次住院來源的擷取快照，不保證整段住院完整；各筆以表中量測時間為準，不代表即時生命徵象。氧氣裝置／流量與缺漏欄位須核對床邊。"
+        ]
         if missing:
             warnings.append("TPR 未辨識到以下欄位標籤（不代表正常）：" + "、".join(missing))
         if not VGHReadOnlyAdapter._first_date(content):
@@ -411,130 +589,270 @@ class VGHReadOnlyAdapter:
         return warnings
 
     def _fetch_report_history(self, bundle: PatientBundle, budget: _RequestBudget) -> None:
-        """Known yearly index route; follow only returned same-origin report links."""
+        """Exhaust returned annual index pages, then every safe report detail."""
         end = bundle.fetched_at.astimezone(EMR_TIMEZONE).date()
-        start = months_before(end, bundle.lookback_months or 3)
-        candidates: dict[str, tuple[datetime, str]] = {}
+        start = months_before(end, bundle.lookback_months or 12)
+        candidates: dict[str, tuple[datetime | None, str, str]] = {}
+        seen_rows: set[str] = set()
         unknown_dates = 0
+        coverage = bundle.coverage
+        coverage.update(
+            report_index_pages=0,
+            report_candidates=0,
+            report_loaded=0,
+            report_failed=0,
+            report_skipped=0,
+            report_discovery_complete=False,
+            report_details_complete=False,
+        )
+        discovery_complete = True
         for year in range(end.year, start.year - 1, -1):
-            budget.consume()
-            page = self._get(
-                self._url(
-                    "findRes",
-                    histno=bundle.patient.histno,
-                    tmonth=str(year),
-                    tdept="ALL",
-                )
+            queue = deque(
+                [self._url("findRes", histno=bundle.patient.histno, tmonth=str(year), tdept="ALL")]
             )
-            soup = BeautifulSoup(page.text, "html.parser")
-            table = soup.find(id="reslist")
-            if table is None:
-                raise InterfaceChangedError("年度報告索引缺少 #reslist。")
-            headers = [clean_text(cell.get_text(" ", strip=True)) for cell in table.find_all("th")]
-            date_column = next(
-                (
-                    i
-                    for i, header in enumerate(headers)
-                    if re.search(r"報告日期|報告時間|report.*date", header, re.I)
-                ),
-                4,
-            )
-            lines = ["\t".join(headers)] if headers else []
-            for row in table.find_all("tr"):
-                cells = [clean_text(cell.get_text(" ", strip=True)) for cell in row.find_all("td")]
-                if not cells:
+            seen_urls: set[str] = set()
+            fingerprints: set[str] = set()
+            while queue:
+                self._check_cancelled()
+                url = queue.popleft()
+                key = canonical_url(url)
+                if key in seen_urls:
                     continue
-                if len(cells) > date_column:
-                    cells[date_column] = normalize_result_date(cells[date_column])
-                dates = source_dates(cells[date_column]) if len(cells) > date_column else []
-                if not dates:
-                    unknown_dates += 1
-                    # Keep unknown dates visible, never call them outside the window.
-                    lines.append("[DATE UNKNOWN] " + "\t".join(cells))
-                    continue
-                day = dates[0]
-                if not start <= day <= end:
-                    continue
-                lines.append("\t".join(cells))
-                anchor = row.find("a", href=True)
-                if anchor is None:
-                    continue
-                url = urljoin(page.url, str(anchor["href"]))
-                # Only report links returned by the report index; no generic navigation or writes.
-                parsed = urlparse(url)
-                linked_ids = parse_qs(parsed.query).get("histno", [])
-                if (
-                    not same_origin_https(url, self.allowed_hosts)
-                    or not parsed.path.startswith("/emr/")
-                    or (linked_ids and linked_ids != [bundle.patient.histno])
-                    or re.search(
-                        r"(?:delete|update|insert|save|submit|logout)",
-                        parsed.path + "?" + parsed.query,
-                        re.I,
+                if len(seen_urls) >= self.max_result_pages:
+                    discovery_complete = False
+                    bundle.warnings.append(
+                        f"年度報告索引達安全上限 {self.max_result_pages} 頁，尚有頁面未讀取。"
                     )
-                    or str(anchor["href"]).startswith(("#", "javascript:"))
-                ):
-                    bundle.warnings.append("有報告明細連結不符合唯讀院內路徑，已略過。")
-                    continue
-                candidates.setdefault(
-                    url, (datetime(day.year, day.month, day.day, tzinfo=EMR_TIMEZONE), cells[0])
-                )
-            index_text = "\n".join(lines)
-            bundle.add_record(
-                SourceRecord(
-                    source_type="report_index",
-                    title=f"{year} 年報告索引（回溯範圍內）",
-                    content=bounded_source(
-                        index_text or "[No readable report rows; verify in EMR.]", 200000
-                    ),
-                    source_url=page.url,
-                    source_record_id=sha256(page.url.encode()).hexdigest()[:20],
-                    status="index_only" if lines else "empty_unverified",
-                )
-            )
-            # An annual index is not proof that server-side paging was exhausted.
-            if soup.find("a", attrs={"rel": "next"}) or soup.find(
-                "a", string=re.compile(r"下一頁|Next", re.I)
-            ):
-                bundle.warnings.append("年度報告索引含下一頁；尚未取得後續頁，歷史範圍不完整。")
+                    break
+                seen_urls.add(key)
+                try:
+                    budget.consume()
+                    page = self._get(url)
+                    if not same_result_scope(url, page.url, bundle.patient.histno):
+                        raise InterfaceChangedError("報告索引回應離開已核對的病人／年度範圍。")
+                    soup = BeautifulSoup(page.text, "html.parser")
+                    self._observe_lab_categories(soup, page.url, bundle.patient)
+                    table = soup.find(id="reslist")
+                    if table is None:
+                        raise InterfaceChangedError("年度報告索引缺少 #reslist。")
+                    coverage["report_index_pages"] += 1
+                    fingerprint = sha256(str(table).encode()).hexdigest()
+                    if fingerprint in fingerprints:
+                        discovery_complete = False
+                        bundle.warnings.append(
+                            "報告索引分頁重複回傳相同內容，已停止該分支；索引可能未完整。"
+                        )
+                        continue
+                    fingerprints.add(fingerprint)
+                    header_row = table.find("tr")
+                    header_cells = (
+                        header_row.find_all(["th", "td"], recursive=False) if header_row else []
+                    )
+                    headers = [clean_text(cell.get_text(" ", strip=True)) for cell in header_cells]
+                    is_header = any(
+                        re.search(r"報告日期|報告時間|report.*(?:date|time)", label, re.I)
+                        for label in headers
+                    )
+                    if not is_header:
+                        headers = [
+                            clean_text(cell.get_text(" ", strip=True))
+                            for cell in table.find_all("th")
+                        ]
+                    date_column = next(
+                        (
+                            i
+                            for i, header in enumerate(headers)
+                            if re.search(r"報告日期|報告時間|report.*(?:date|time)", header, re.I)
+                        ),
+                        4,
+                    )
+                    lines = ["\t".join(headers)] if headers else []
+                    parsed_rows = 0
+                    for row in table.find_all("tr"):
+                        if is_header and row is header_row:
+                            continue
+                        cells = [
+                            clean_text(cell.get_text(" ", strip=True))
+                            for cell in row.find_all("td", recursive=False)
+                        ]
+                        if not cells:
+                            continue
+                        anchors = row.find_all("a", href=True)
+                        if (
+                            anchors
+                            and len(cells) == 1
+                            and all(
+                                re.search(
+                                    r"[?&](?:page|pageno|pagenum|pagenumber|pageindex|offset|startrow)=",
+                                    str(anchor["href"]),
+                                    re.I,
+                                )
+                                for anchor in anchors
+                            )
+                        ):
+                            continue
+                        parsed_rows += 1
+                        when = None
+                        precision = ""
+                        if len(cells) > date_column:
+                            cells[date_column] = normalize_result_date(cells[date_column])
+                            dates = source_dates(cells[date_column])
+                            if dates:
+                                day = dates[0]
+                                if not start <= day <= end:
+                                    continue
+                                when = datetime(day.year, day.month, day.day, tzinfo=EMR_TIMEZONE)
+                                precision = "day"
+                                clock = re.search(
+                                    r"(?<!\d)([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?(?![\d:])",
+                                    cells[date_column],
+                                )
+                                if clock:
+                                    when = when.replace(
+                                        hour=int(clock[1]),
+                                        minute=int(clock[2]),
+                                        second=int(clock[3] or 0),
+                                    )
+                                    precision = "second" if clock[3] is not None else "minute"
+                        lines.append(("[DATE UNKNOWN] " if when is None else "") + "\t".join(cells))
+                        row_key = sha256(
+                            (
+                                "\t".join(cells)
+                                + "|"
+                                + "|".join(str(anchor["href"]) for anchor in anchors)
+                            ).encode()
+                        ).hexdigest()
+                        if row_key in seen_rows:
+                            continue
+                        seen_rows.add(row_key)
+                        if when is None:
+                            unknown_dates += 1
+                        if not anchors:
+                            coverage["report_skipped"] += 1
+                            continue
+                        valid = False
+                        rejected = False
+                        for anchor in anchors:
+                            detail_url = report_detail_url(
+                                str(anchor["href"]), page.url, bundle.patient.histno
+                            )
+                            if detail_url is None:
+                                rejected = True
+                                continue
+                            valid = True
+                            candidates.setdefault(detail_url, (when, cells[0], precision))
+                        if not valid or rejected:
+                            coverage["report_skipped"] += 1
+                        if rejected:
+                            bundle.warnings.append(
+                                "有報告明細連結不符合已知唯讀路徑或同一病人範圍，已略過。"
+                            )
+                    index_text = "\n".join(lines)
+                    record = SourceRecord(
+                        source_type="report_index",
+                        title=f"{year} 年報告索引（回溯範圍內，第 {len(seen_urls)} 頁）",
+                        content=bounded_source(
+                            index_text or "[No readable report rows; verify in EMR.]", 200000
+                        ),
+                        source_url=page.url,
+                        source_record_id=sha256(canonical_url(page.url).encode()).hexdigest()[:20],
+                        status="index_only" if parsed_rows else "empty_unverified",
+                    )
+                    self._add_checked_record(bundle, record)
+                    if not parsed_rows or TRUNCATION_MARKER in record.content:
+                        discovery_complete = False
+                    links, rejected = pagination_urls(soup, page.url, bundle.patient.histno)
+                    if rejected:
+                        discovery_complete = False
+                        bundle.warnings.append(
+                            f"有 {rejected} 個報告分頁連結無法確認唯讀及同一範圍，已略過；索引尚未完整。"
+                        )
+                    queue.extend(link for link in links if canonical_url(link) not in seen_urls)
+                    coverage["report_candidates"] = len(candidates)
+                    self._notify(
+                        f"已讀取 {coverage['report_index_pages']} 頁報告索引，找到 {len(candidates)} 份可讀明細。"
+                    )
+                except (LoginError, EMRCancelled, RequestBudgetExceeded):
+                    raise
+                except (
+                    EMRError,
+                    requests.RequestException,
+                    ValueError,
+                    AttributeError,
+                    KeyError,
+                ) as exc:
+                    discovery_complete = False
+                    bundle.warnings.append(f"歷史報告索引：{self._safe_error(exc)}")
+        coverage["report_discovery_complete"] = discovery_complete
         if unknown_dates:
             bundle.warnings.append(
-                f"{unknown_dates} 列報告日期未辨識；已保留索引，但未假定屬於回溯範圍。"
+                f"{unknown_dates} 列報告日期未辨識；仍嘗試讀取明細並保留日期未知，不假定屬於回溯範圍或當日。"
             )
-        ordered = sorted(candidates.items(), key=lambda item: item[1][0], reverse=True)
-        loaded = 0
-        for url, (when, title) in ordered[:12]:
+        if coverage["report_skipped"]:
+            bundle.warnings.append(
+                f"{coverage['report_skipped']} 列索引有明細連結無法安全讀取；索引不是報告全文。"
+            )
+        oldest = datetime.min.replace(tzinfo=EMR_TIMEZONE)
+        ordered = sorted(candidates.items(), key=lambda item: item[1][0] or oldest, reverse=True)
+        truncated = False
+        for url, (when, title, precision) in ordered:
+            self._check_cancelled()
             try:
                 budget.consume()
                 page = self._get(url)
+                # A redirect must not silently switch patient or result endpoint.
+                if not same_report_identity(url, page.url, bundle.patient.histno):
+                    raise InterfaceChangedError("報告回應離開已核對的唯讀明細範圍。")
                 soup = BeautifulSoup(page.text, "html.parser")
-                detail = soup.find(id=re.compile(r"^RSCONTENT$", re.I)) or soup.find("pre")
+                detail = report_content(soup)
                 if detail is None:
                     raise InterfaceChangedError(
-                        "明細缺少 RSCONTENT／pre，不能把選擇頁視為報告全文。"
+                        "明細缺少 RSCONTENT／pre 或可辨識的檢驗結果表格，不能把選擇頁視為報告全文。"
                     )
-                content = self._extract_clinical_text(BeautifulSoup(str(detail), "html.parser"))
+                # Pin the already-validated whole report as the outer container;
+                # otherwise a nested resdtable could hide other tables/narrative.
+                report_soup = BeautifulSoup("<div id='RSCONTENT'></div>", "html.parser")
+                report_soup.div.append(BeautifulSoup(str(detail), "html.parser"))
+                content = self._extract_clinical_text(report_soup)
                 if not content:
                     raise InterfaceChangedError("明細沒有可讀報告文字。")
-                bundle.add_record(
-                    SourceRecord(
-                        source_type="report",
-                        title=title,
-                        content=content,
-                        source_url=page.url,
-                        source_record_id=sha256(page.url.encode()).hexdigest()[:20],
-                        observed_at=when,
-                        status="status_unverified",
-                    )
+                record = SourceRecord(
+                    source_type="report",
+                    title=title,
+                    content=content,
+                    source_url=page.url,
+                    source_record_id=sha256(canonical_url(page.url).encode()).hexdigest()[:20],
+                    observed_at=when,
+                    observed_precision=precision,
+                    status="status_unverified",
                 )
-                loaded += 1
-            except LoginError:
+                self._add_checked_record(bundle, record)
+                coverage["report_loaded"] += 1
+                truncated |= TRUNCATION_MARKER in content
+            except (LoginError, EMRCancelled, RequestBudgetExceeded):
                 raise
-            except (EMRError, requests.RequestException) as exc:
+            except (
+                EMRError,
+                requests.RequestException,
+                ValueError,
+                AttributeError,
+                KeyError,
+            ) as exc:
+                coverage["report_failed"] += 1
                 bundle.warnings.append(f"報告明細：{self._safe_error(exc)}")
+            self._notify(
+                f"已讀取 {coverage['report_loaded']}／{len(ordered)} 份報告；{coverage['report_failed']} 份待核對。"
+            )
+        coverage["report_details_complete"] = (
+            not truncated
+            and not coverage["report_failed"]
+            and not coverage["report_skipped"]
+            and coverage["report_loaded"] == len(candidates)
+        )
         bundle.warnings.append(
-            f"回溯報告索引可追蹤 {len(ordered)} 個明細連結，已讀取 {loaded} 份全文（每次最多 12 份，優先最新）；"
-            "索引不是全文，未載入／未列出不等於沒有報告。報告 final／pending 需核對原文。"
+            f"回溯報告已讀取 {coverage['report_index_pages']} 頁索引、{coverage['report_loaded']}／{len(candidates)} 份可讀明細；"
+            f"失敗 {coverage['report_failed']} 份、無法追蹤 {coverage['report_skipped']} 列。"
+            "只涵蓋目前頁面可發現的項目；未載入／未列出不等於沒有報告，final／pending 需核對原文。"
         )
 
     def _fetch_record(
@@ -548,6 +866,7 @@ class VGHReadOnlyAdapter:
         expected_id: str | None,
         patient: PatientSummary,
     ) -> SourceRecord | None:
+        self._check_cancelled()
         budget.consume()
         page = self._get(url)
         soup = BeautifulSoup(page.text, "html.parser")
@@ -555,6 +874,16 @@ class VGHReadOnlyAdapter:
             raise InterfaceChangedError(
                 f"頁面缺少預期結構 #{expected_id}，已視為可疑內容而非空資料。"
             )
+        if source_type.startswith("lab_"):
+            if not same_result_scope(url, page.url, patient.histno):
+                raise InterfaceChangedError("檢驗回應離開已核對的病人／類別範圍。")
+            links, rejected = pagination_urls(soup, page.url, patient.histno)
+            self._lab_navigation[url] = (
+                links,
+                rejected,
+                sha256(str(soup.find(id="resdtable")).encode()).hexdigest(),
+            )
+        self._observe_lab_categories(soup, page.url, patient)
         if source_type == "profile" and soup.find("table") is None:
             raise InterfaceChangedError("基本資料頁缺少預期表格。")
         final_page = page
@@ -607,7 +936,8 @@ class VGHReadOnlyAdapter:
         # Profile dates commonly describe birth, not when this source was recorded.
         observed_at = (
             None
-            if source_type in {"profile", "lab_chemistry", "lab_cbc", "report_index", "vital_signs"}
+            if source_type in {"profile", "report_index", "vital_signs"}
+            or source_type.startswith("lab_")
             else self._first_date(content)
         )
         record_id = sha256(final_page.url.encode("utf-8")).hexdigest()[:20]
@@ -647,6 +977,9 @@ class VGHReadOnlyAdapter:
         context = self._get(self._url("findEmr", histno=patient.histno))
         if not clean_text(BeautifulSoup(context.text, "html.parser").get_text(" ", strip=True)):
             raise IncompleteFetchError("病人 context 頁為空，已停止載入。")
+        self._observe_lab_categories(
+            BeautifulSoup(context.text, "html.parser"), context.url, patient
+        )
 
     def _resolve_case_no(self, patient: PatientSummary, budget: _RequestBudget) -> str:
         budget.consume()
@@ -664,16 +997,47 @@ class VGHReadOnlyAdapter:
         return candidates[0] if candidates else ""
 
     def _get(self, url: str) -> _FetchedPage:
+        self._check_cancelled()
         return self._raw_get(url, use_limiter=True)
 
     def _raw_get(self, url: str, *, use_limiter: bool) -> _FetchedPage:
+        self._check_cancelled()
         if not same_origin_https(url, self.allowed_hosts):
             raise EMRError("已封鎖非院內允許網域的請求。")
-        if use_limiter:
-            self._limiter.wait()
+        original_url = url
+        query = {key.lower(): values for key, values in parse_qs(urlparse(url).query).items()}
+        histno = self._result_histno or query.get("histno", [""])[0]
+        detail_request = report_detail_url(url, url, histno) is not None
+        result_request = query.get("action", [""])[0].lower() in {"findres", "findresd"}
+        protected = detail_request or result_request
         try:
-            response = self.session.get(url, timeout=(10, 45), allow_redirects=True)
-            response.raise_for_status()
+            for hop in range(6):
+                self._check_cancelled()
+                if use_limiter:
+                    self._limiter.wait()
+                self._check_cancelled()
+                response = self.session.get(url, timeout=(10, 45), allow_redirects=not protected)
+                response.raise_for_status()
+                if not protected or response.status_code not in {301, 302, 303, 307, 308}:
+                    break
+                target = urljoin(url, response.headers.get("Location", ""))
+                if self._looks_like_login("", target):
+                    self._discard_session()
+                    raise LoginError("院內登入 session 已逾時，請重新登入。")
+                allowed = (
+                    same_report_identity(original_url, target, histno)
+                    if detail_request
+                    else same_result_scope(original_url, target, histno)
+                )
+                if not allowed:
+                    raise InterfaceChangedError(
+                        "檢驗／報告重新導向離開已核對的唯讀病人範圍，已停止。"
+                    )
+                if hop == 5 or target == url:
+                    raise InterfaceChangedError("檢驗／報告重新導向重複或超過安全上限，已停止。")
+                if self._active_budget is not None:
+                    self._active_budget.consume()
+                url = target
         except requests.RequestException as exc:
             if self._logged_in:
                 self._discard_session()
@@ -682,6 +1046,12 @@ class VGHReadOnlyAdapter:
         if not same_origin_https(response.url, self.allowed_hosts):
             self._discard_session()
             raise LoginError("院內請求被導向非允許網域；已停止並丟棄 session。")
+        if protected and not (
+            same_report_identity(original_url, response.url, histno)
+            if detail_request
+            else same_result_scope(original_url, response.url, histno)
+        ):
+            raise InterfaceChangedError("檢驗／報告回應離開已核對的唯讀病人範圍。")
         text = self._decode(response)
         if self._looks_like_login(text, response.url) and self._logged_in:
             self._discard_session()
@@ -842,9 +1212,9 @@ class VGHReadOnlyAdapter:
             for table in list(container.find_all("table")):
                 if table.find_parent("table") is None:
                     table.replace_with("\n" + table_to_tsv(table) + "\n")
-            content = container.get_text("\n", strip=True)
+            content = container.get_text("\n", strip=False)
         # Do not collapse TSV separators: they bind dates, results and units.
-        lines = [line.strip() for line in content.splitlines() if line.strip()]
+        lines = [line.strip(" \r\n") for line in content.splitlines() if line.strip()]
         return bounded_source("\n".join(lines), 200000)
 
     @staticmethod

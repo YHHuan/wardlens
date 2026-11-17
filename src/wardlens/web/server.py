@@ -26,7 +26,7 @@ _STATIC = {
 }
 _ACTIONS = frozenset({
     "login", "search", "select", "load", "logout", "draft", "prepare", "repair",
-    "generate", "cancel", "copy_prompt", "settings", "key_save", "key_delete",
+    "generate", "cancel", "copy_prompt", "deidentify", "source_detail", "source_search", "trend_detail", "settings", "key_save", "key_delete",
     "oauth", "connection", "developer_get", "developer_save", "models",
     "browser_probe", "browser_prepare", "export", "close",
 })

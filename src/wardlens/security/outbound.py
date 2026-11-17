@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from hashlib import sha256
 
 from wardlens.models import PatientSummary
@@ -38,8 +39,9 @@ class OutboundGuard:
     def __init__(self, deidentifier: Deidentifier | None = None) -> None:
         self.deidentifier = deidentifier or Deidentifier()
 
-    def prepare(self, raw_text: str, patient: PatientSummary | None = None) -> ApprovedPreview:
-        result = self.deidentifier.deidentify(raw_text, patient=patient)
+    def prepare(self, raw_text: str, patient: PatientSummary | None = None,
+                *, anchor_time: datetime | None = None) -> ApprovedPreview:
+        result = self.deidentifier.deidentify(raw_text, patient=patient, anchor_time=anchor_time)
         if result.residual_risks:
             raise PreviewBlocked(result)
         return ApprovedPreview(

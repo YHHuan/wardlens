@@ -131,7 +131,7 @@ def test_report_history_crosses_year_and_filters_before_fetching_detail(monkeypa
     assert "2025-10-16" in render_bundle_overview(bundle)
 
 
-def test_report_cap_missing_dates_and_pagination_are_explicit(monkeypatch):
+def test_all_reports_pagination_unknown_dates_and_duplicate_links_are_loaded(monkeypatch):
     adapter = VGHReadOnlyAdapter()
     bundle = PatientBundle(
         PatientSummary(histno="90000001"),
@@ -142,20 +142,30 @@ def test_report_cap_missing_dates_and_pagination_are_explicit(monkeypatch):
 
     def fetch(url):
         calls.append(url)
-        if "tmonth=" in url:
-            rows = [(f"2026/10/{day:02}", f"?action=findRes&report={day}") for day in range(1, 16)]
+        query = parse_qs(urlparse(url).query)
+        if "tmonth" in query and query.get("page") == ["2"]:
+            rows = [
+                ("2026/10/16 09:45", f"?report={number}&action=findRes") for number in range(30, 56)
+            ]
+            return _FetchedPage(_index(rows), url)
+        if "tmonth" in query:
+            rows = [("2026/10/15", f"?action=findRes&report={number}") for number in range(1, 31)]
             rows.append(("unknown", "?action=findRes&report=unknown"))
             return _FetchedPage(_index(rows) + "<a rel='next' href='?page=2'>Next</a>", url)
         return _FetchedPage("<pre>Synthetic report</pre>", url)
 
     monkeypatch.setattr(adapter, "_get", fetch)
-    adapter._fetch_report_history(bundle, _RequestBudget(40))
-    assert len(calls) == 13
-    assert len(bundle.records_of("report")) == 12
-    assert "15 個明細連結，已讀取 12 份" in "\n".join(bundle.warnings)
-    assert any("下一頁" in w for w in bundle.warnings)
+    adapter._fetch_report_history(bundle, _RequestBudget(100))
+    assert len(calls) == 58  # 2 index pages + 55 dated + 1 date-unknown report
+    assert len(bundle.records_of("report")) == 56
+    assert bundle.coverage["report_candidates"] == bundle.coverage["report_loaded"] == 56
+    assert bundle.coverage["report_discovery_complete"]
+    assert bundle.coverage["report_details_complete"]
+    assert bundle.records_of("report")[0].observed_at.hour == 9
+    assert bundle.records_of("report")[-1].observed_at is None
+    assert all("histno=90000001" in url for url in calls if "page=2" in url)
     assert any("日期未辨識" in w for w in bundle.warnings)
-    assert not any("report=unknown" in url for url in calls)
+    assert any("report=unknown" in url for url in calls)
 
 
 def test_prompt_keeps_earlier_and_latest_values_and_never_hides_truncation():

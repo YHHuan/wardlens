@@ -2,14 +2,14 @@
 
 WardLens 是給台灣 PGY／住院醫師使用的 Windows 工具，分為「查房前整理」與「急症處置」。它以唯讀方式整理 VGH EMR 病人清單與選取病人的 admission note、progress note、用藥、生命徵象、檢驗趨勢及報告索引，再由使用者決定是否把「先去識別、再人工預覽」的內容送往 OpenRouter。
 
-> 狀態：`v0.7.0` 是本機網頁介面的 portable pilot，加入查房趨勢表與 Markdown 閱讀，保留桌面備援。使用者已回報上一版資料載入、AI 與獨立瀏覽器測試可用；新版介面與臨床資料涵蓋仍需院內實機驗收。病歷擷取沿用既有 Requests 流程，主介面不需要 Selenium 或 WebDriver。它不是已核准的醫療器材，不會自動寫回 EMR。
+> 狀態：`v0.8.0` 是本機網頁介面的 portable pilot，擴大檢驗／報告擷取、加入可搜尋的趨勢圖表與自動表頭清理，保留桌面備援。使用者已回報上一版資料載入、AI 與獨立瀏覽器測試可用；新版介面與臨床資料涵蓋仍需院內實機驗收。病歷擷取沿用既有 Requests 流程，主介面不需要 Selenium 或 WebDriver。它不是已核准的醫療器材，不會自動寫回 EMR。
 
 ## 目前功能
 
 - 顯示超過 15 人的清單，追蹤分頁、去重、頁面宣告總數與實際取得數。
 - 只在使用者選取病人後抓詳細內容，不預抓整批病歷。
 - 本機整理最新 admission note 頂端 TODO、近期報告與用藥；未辨識 TODO 時只顯示原文摘錄，不當成醫囑。
-- 程式直接從來源表格整理趨勢，CBC 優先 WBC／Hb／PLT，differential 可展開。每列顯示最近一次時間與跨度；未知時間另列、不同單位分組，詳細時間與來源收在展開區。
+- 程式直接從來源表格整理趨勢，CBC 優先 WBC／Hb／PLT，differential 可展開。每列顯示最近一次時間與跨度，展開可看完整觀測點的座標圖與資料表；未知時間另列，不同單位、檢體與方法分組，含少見及定性檢驗。
 - 產生查房重點、英文 Admission Note、自由提問與成人住院急症處置草稿。
 - 兩個 AI 頁各有可編輯病人資料框、問題／目前病況框與回答區；資料框刪改後，不會另外附回原始病歷。各頁可帶入已載入資料或重新抓取。
 - 回答顯示 Markdown 標題、表格與清單，可複製純文字或展開 Markdown 原文。背景 prompt 與完整 input 平時收合，按「預覽並送出」才檢查。
@@ -18,7 +18,9 @@ WardLens 是給台灣 PGY／住院醫師使用的 Windows 工具，分為「查�
 - OpenRouter 瀏覽器一鍵登入（OAuth PKCE），不必手打長 key；亦可貼上一次並存入 Windows Credential Manager。
 - 開發者模式可調整七條路由的模型 ID、reasoning、max tokens 與四套 system prompt，並從 OpenRouter 即時載入最新／ZDR 模型目錄；升級保留自訂模型與 prompt。
 - 預覽遇到疑似長識別碼時，可在本機編輯遮罩後重新檢查；不會直接解除阻擋。
-- 可選近 1／3／6／12 個月回溯，保留累積檢驗日期／欄位；年度報告索引依範圍篩選，最多讀取最新 12 份明細。涵蓋日期與缺漏會列入總覽和 AI input。
+- 預設近一年，可選 1／3／6／12 個月。依院內頁面選單發現檢驗類別、追蹤一般報告索引與明細分頁，不再只取 CBC／生化或最新 12 份。顯示擷取進度，可停止並保留部分資料；失敗或未核對的涵蓋會明示。
+- 一般報告以段落與表格呈現，可搜尋標題及本機已取得全文。完整報告按需展開，原文保留在本次記憶體供核對。
+- 載入 AI 資料框時先自動移除有標示的姓名、病歷號、報告／檢體編號等行政欄；保留年齡、檢驗、檢體、數值、單位與臨床日期間隔。兩頁顯示處理狀態，手動貼文後可按「重新去識別化」。
 - 另讀本次住院 TPR 表，保留生命徵象時間與欄位；缺少 BP／HR／T／RR／SpO₂ 或日期會明示，舊數值不代表現在狀況。
 - 預設不傳 `max_tokens`，由供應商決定額度；開發者模式仍可手動設定。舊版內建額度會遷移，模型／prompt 保留。
 - 「瀏覽器測試」以 Edge／WebDriver 開啟本機合成頁，測試中文、18 列表格與動態更新，並可儲存不含病歷的診斷紀錄。這是 Selenium 前置測試，尚未替換 EMR 擷取。
@@ -29,11 +31,11 @@ WardLens 是給台灣 PGY／住院醫師使用的 Windows 工具，分為「查�
 
 ## 快速使用
 
-1. [直接下載 v0.7.0 Portable ZIP（含 WardLens.exe）](https://github.com/YHHuan/wardlens/releases/download/v0.7.0/WardLens-Portable.zip)，或從 [GitHub Releases](https://github.com/YHHuan/wardlens/releases) 選 `WardLens-Portable.zip`。不是「Code → Download ZIP」或 `WardLens-Source.zip`。
+1. [直接下載 v0.8.0 Portable ZIP（含 WardLens.exe）](https://github.com/YHHuan/wardlens/releases/download/v0.8.0/WardLens-Portable.zip)，或從 [GitHub Releases](https://github.com/YHHuan/wardlens/releases) 選 `WardLens-Portable.zip`。不是「Code → Download ZIP」或 `WardLens-Source.zip`。
 2. 將 ZIP **完整解壓縮**到本機資料夾；`WardLens.exe`、`runtime`、`app`、`packages` 必須放在一起，不可只複製單一 EXE／BAT。
 3. 雙擊 **`WardLens.exe`**，會出現小控制視窗並優先以 Edge InPrivate 開啟本機工作台；Edge 不可用時嘗試預設瀏覽器。第一次使用「合成資料 Demo」登入，確認能載入 18 人清單。若需查看啟動訊息，可用同包的 `Start-WardLens.bat`。
 4. 真實環境取消 Demo，輸入入口網帳密；帳密只留在本次記憶體，不會儲存。
-5. 輸入醫師燈號／病房後載入清單，選一名病人；病人標題旁選回溯月份（預設 3），再載入詳細資料。更改範圍後需重新載入。
+5. 輸入醫師燈號／病房後載入清單，選一名病人；病人標題旁選回溯月份（預設 12，即一年），再載入詳細資料。更改範圍後需重新載入。
 6. 若院方允許外部 AI，到「設定」啟用外部 AI、確認政策，再按「用瀏覽器登入 OpenRouter」；授權後 key 會自動存進 Windows Credential Manager。
 7. 可先按「檢查連線 / 模型」確認 key 與公開目錄（不傳病歷、不生成）；再用合成 Demo 測試實際生成。帳戶須有足夠 credits／key 額度。
 8. 「查房前整理」先顯示本機總覽與趨勢。「查房前整理」及「急症處置」各有獨立的病人資料框、問題／病況框與回答。背景 prompt 不必操作；需要修改時進開發者模式。
@@ -41,7 +43,7 @@ WardLens 是給台灣 PGY／住院醫師使用的 Windows 工具，分為「查�
 
 重新整理網頁會失去本次連線憑證，請從控制視窗按「開啟工作台」。需要舊介面時，按「切換桌面備援」、執行 `Start-WardLens-Desktop.bat`，或以 `WardLens.exe --desktop` 啟動。關閉控制視窗或按「結束」會停止本機服務；只關網頁不等於結束程式。操作說明見 [本機工作台](docs/LOCAL_UI.md)。
 
-從舊版升級請關閉舊視窗，將新 ZIP 解壓縮到另一個資料夾，再確認版本為 `0.7.0`。API key、自訂模型與 prompt 沿用原本的本機設定；病歷草稿只在記憶體，不會搬到新版、桌面備援或自動存檔。
+從舊版升級請關閉舊視窗，將新 ZIP 解壓縮到另一個資料夾，再確認版本為 `0.8.0`。API key、自訂模型與 prompt 沿用原本的本機設定；病歷草稿只在記憶體，不會搬到新版、桌面備援或自動存檔。
 
 目標電腦不需要安裝 Python、pip 或套件，也不需要系統管理員權限。若沒有出現視窗，雙擊 `Diagnose-WardLens.bat`；它會保留命令視窗並產生不含病歷、帳密、API key 與絕對使用者路徑的 `WardLens-Diagnostics.txt`。
 
@@ -120,8 +122,8 @@ OpenAI 官方建議以較低 reasoning effort 壓低延遲，只有在評測顯�
 - `resdtable`／`reslist` 不存在時視為介面異常，不回傳空資料。
 - `Error.jsp`／強 block marker 會乾淨停止；正式報告文字中的單字 `blocked` 不會誤判。
 - 病人清單總數不符、重複頁面或達上限時標示 incomplete。
-- 不使用 `resdtmonth=00`；預設 3 個月，介面可選 1／3／6／12 個月。
-- 每次最多 40 個院內請求、最多 12 份最新報告全文；跨年索引分年查詢。遇到未辨識日期、未讀全文、分頁或截短會明示，不能視為完整三個月。
+- 不使用 `resdtmonth=00`；預設 12 個月，介面可選 1／3／6／12 個月。舊版預設 3／60 個月會遷移一次，之後自行選回 3 個月會保留。
+- 跨年索引分年查詢，日期未知的可讀報告也保留並標記。只追蹤核對過的同院、同病人、唯讀連結；未知或不安全的頁面不猜網址。保留有限請求／頁數上限以防循環；觸頂、失敗或截短會標示部分完成，不宣稱完整涵蓋。
 
 預覽修正、OpenRouter 連線及趨勢限制見 [AI 與歷史資料操作說明](docs/AI_AND_TRENDS.md)。
 

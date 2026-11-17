@@ -17,7 +17,7 @@ WardLens/
 └── THIRD-PARTY/   dependency lock, Python license, and official SPDX SBOM
 ```
 
-Double-click `WardLens.exe`; it starts the bundled PSF `pythonw.exe` in isolated mode using an absolute path, without a shell or temporary extraction. v0.7 opens a small Tk controller plus the local browser workbench, preferring installed Edge InPrivate and falling back to the default browser. The main UI needs no Node, Selenium, WebDriver or remote web assets. The readable BAT remains available for diagnostics; `Start-WardLens-Desktop.bat` or `--desktop` opens the Tk backup. Startup runs no installer, PowerShell, pip, downloader, or execution-policy bypass. Keep the complete extracted directory together; the EXE alone is not the application.
+Double-click `WardLens.exe`; it starts the bundled PSF `pythonw.exe` in isolated mode using an absolute path, without a shell or temporary extraction. v0.8 opens a small Tk controller plus the local browser workbench, preferring installed Edge InPrivate and falling back to the default browser. The main UI needs no Node, Selenium, WebDriver or remote web assets. The readable BAT remains available for diagnostics; `Start-WardLens-Desktop.bat` or `--desktop` opens the Tk backup. Startup runs no installer, PowerShell, pip, downloader, or execution-policy bypass. Keep the complete extracted directory together; the EXE alone is not the application.
 
 Closing the controller or selecting Exit must stop the local server and clinical session. Refreshing the browser requires reopening it from the controller because the connection token is memory-only. Closing a browser tab alone does not immediately terminate the program.
 
@@ -48,14 +48,15 @@ The script:
 8. extracts the finished ZIP to a fresh Windows path containing spaces and Chinese characters, then reruns portable launch/core/UI/diagnostic checks;
 9. emits `WardLens-Portable.zip`, `WardLens-Source.zip`, provenance, and SHA-256 sums under `dist\release`.
 
-## v0.7 acceptance
+## v0.8 acceptance
 
-These are release requirements, not evidence that a particular v0.7 build or hospital workstation has passed. Attach the actual CI run, artifact hash and Windows observations to the release review. Use only synthetic records and a fake LLM transport for automated generation tests.
+These are release requirements, not evidence that a particular v0.8 build or hospital workstation has passed. Attach the actual CI run, artifact hash and Windows observations to the release review. Use only synthetic records and a fake LLM transport for automated generation tests.
 
 - Verify the full ZIP contains all four static assets and the desktop BAT, and runs without Node, pip, CDN or a driver preparation step.
 - Open the main workbench from the EXE, load the 18-patient Demo, select/load/switch patients, edit each workspace independently, review/repair previews and render synthetic Chinese streaming answers. Verify logout and exit clear the session, refresh requires controller reopen, and desktop fallback starts.
 - Check Markdown headings/tables/plain-text copy and hostile HTML/link/image fixtures; no source/model content may execute or fetch external resources. Check the layout on the target Windows/Edge screen size, not only Python API tests.
-- Verify CBC ordering, expandable differential/source details, visible last measurement time and span, unit separation, unknown-time values, conflicting timestamps, single points and missing sources. Do not treat a synthetic parser test as validation of live hospital HTML.
+- Verify CBC ordering, searchable rare assays, full-window charts/tables fetched on expansion, cleaned report sections, local full-text search and updated source caches after same-patient reload. Retain units, specimen/method identity, report-versus-collection time and time precision; keep qualitative/unknown/conflicting observations visible. Verify one-year default and selectable windows, more than 12 reports, cross-year/paginated discovery and explicit partial coverage/cancellation. Do not treat a synthetic parser test as validation of live hospital HTML.
+- Verify automatic draft cleanup, repeat cleanup after editing, preservation of clinical numbers/doses and date-anchor consistency across midnight.
 - Run unauthorized/wrong Host/Origin/token requests, stale epoch/revision and reused-send tests. Confirm credentials/cookies are absent from API state, clinical content is absent from logs, and no browser persistent storage is used.
 - Repeat startup and core flows from the finished ZIP in a fresh Windows directory with spaces and Chinese characters. Check both BAT paths, controller shutdown and missing-runtime diagnostics.
 

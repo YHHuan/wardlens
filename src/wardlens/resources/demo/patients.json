@@ -52,6 +52,22 @@
           "content": "ceftriaxone 2 g IV QD\nazithromycin 500 mg PO QD\napixaban 5 mg PO BID"
         },
         {
+          "source_type": "report",
+          "title": "合成特殊檢驗報告：Urine porphyrin panel",
+          "source_record_id": "demo-a-rare-1",
+          "observed_at": "2026-08-26T12:00:00+08:00",
+          "status": "final",
+          "content": "Patient Name: 測試甲\nMRN: 90000001\nReport ID: DEMO-R20260826001\nAge: 67\nSex: M\nSpecimen: Urine\nMethod: Synthetic method\nTest Name\tResult\tUnit\tReference range\nPorphobilinogen\t8.2\tµmol/mmol creatinine\tSynthetic range only\nALA screen\tPositive\t\tSynthetic reference\n\n這是完全虛構的版面測試資料，並非診斷或參考區間；用來測試少見檢驗與定性結果呈現。"
+        },
+        {
+          "source_type": "report",
+          "title": "合成特殊檢驗追蹤報告",
+          "source_record_id": "demo-a-rare-2",
+          "observed_at": "2026-08-27T12:00:00+08:00",
+          "status": "final",
+          "content": "Patient Name: 測試甲\nMRN: 90000001\nReport ID: DEMO-R20260827001\nSpecimen: Urine\nMethod: Synthetic method\nTest Name\tResult\tUnit\tReference range\nPorphobilinogen\t3.1\tµmol/mmol creatinine\tSynthetic range only\nALA screen\tNegative\t\tSynthetic reference\n\n合成報告備註：測試全文搜尋 porphyrin，兩份報告只建立報告時間趨勢，不猜採檢時間。"
+        },
+        {
           "source_type": "report_index",
           "title": "近期報告索引",
           "source_record_id": "demo-a-report",

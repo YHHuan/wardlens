@@ -192,8 +192,8 @@ class AppSettings:
     max_requests_per_minute: int = 60
     max_patient_pages: int = 20
     max_patients: int = 200
-    lab_lookback_months: int = 3
-    history_window_version: int = 1
+    lab_lookback_months: int = 12
+    history_window_version: int = 2
     output_budget_version: int = 1
 
     @classmethod
@@ -209,16 +209,16 @@ class AppSettings:
             return cls()
         allowed = {field_name for field_name in cls.__dataclass_fields__}
         values = {key: value for key, value in payload.items() if key in allowed}
-        # v0.3 saved the invisible 60-month default on every launch. Upgrade that
-        # shipped value to the requested 3 months; keep supported custom windows.
-        months = values.get("lab_lookback_months", 3)
-        if not payload.get("history_window_version") and months == 60:
-            months = 3
+        # Upgrade previous shipped defaults once. A new explicit selection is
+        # saved with v2, including a deliberate return to the 3-month window.
+        months = values.get("lab_lookback_months", 12)
+        if payload.get("history_window_version") != 2 and months in (3, 60):
+            months = 12
         try:
             values["lab_lookback_months"] = max(1, min(int(months), 12))
         except (ValueError, TypeError):
-            values["lab_lookback_months"] = 3
-        values["history_window_version"] = 1
+            values["lab_lookback_months"] = 12
+        values["history_window_version"] = 2
         values["custom_profiles"] = _clean_profile_overrides(values.get("custom_profiles"))
         if not payload.get("output_budget_version"):
             # Old developer edits could freeze the then-shipped token default

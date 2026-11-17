@@ -267,3 +267,134 @@ def test_explicit_todo_section_stops_at_hpi_and_chinese_actions_are_recognized()
 def test_no_admission_record_has_no_fabricated_excerpt():
     view = build_rounding_view(bundle_of("Date\tCRP\n2026-10-30\t1.0"))
     assert view["todo_kind"] == "none" and view["todos"] == []
+
+
+def test_rare_report_keeps_quantitative_qualitative_and_report_time_provenance():
+    record = SourceRecord("report", "Synthetic rare assays",
+        "Patient Name: PRIVATE NAME\nMRN: 91234567\nAge: 34\nSpecimen: Urine\nMethod: LC-MS/MS\n"
+        "Test Name\tResult\tUnit\tReference range\n"
+        "Porphobilinogen\t8.2\tµmol/mmol creatinine\t0-1.5\n"
+        "ALA screen\tPositive\t\tNegative\n\nInterpretation: Synthetic report only.",
+        observed_at=datetime(2026, 10, 30, 14, tzinfo=EMR_TIMEZONE))
+    bundle = bundle_of("")
+    bundle.records = [record]
+    view = build_rounding_view(bundle)
+    pbg, qualitative = sorted(view["trends"], key=lambda row: row["label"], reverse=True)
+    assert pbg["label"] == "Porphobilinogen" and pbg["unit"] == "µmol/mmol creatinine"
+    assert pbg["specimen"] == "Urine" and pbg["method"] == "LC-MS/MS"
+    assert pbg["latest_known"]["numeric"] == 8.2
+    assert pbg["reference"] == "0-1.5" and pbg["time_basis"] == "report"
+    assert "不代表採檢時間" in pbg["note"]
+    assert qualitative["values"][0]["value"] == "Positive" and not qualitative["chartable"]
+    sections = json.dumps(view["report_details"][0]["sections"], ensure_ascii=False)
+    assert "PRIVATE NAME" not in sections and "91234567" not in sections
+    assert "Age: 34" in sections and "Porphobilinogen" in sections and "Synthetic report only" in sections
+    assert view["sources"][0]["content"] == record.content  # Explicit original remains local.
+
+
+def test_report_tables_respect_specimen_method_units_and_do_not_merge_sections():
+    bundle = bundle_of(
+        "Specimen: Urine\nMethod: Method A\nCollection time: 2026-10-29 08:00\n"
+        "Test\tResult\tUnit\nPBG\t1.0\tmg/L\n"
+        "Specimen: Serum\nMethod: Method A\nCollection time: 2026-10-29 09:00\n"
+        "Test\tResult\tUnit\nPBG\t2.0\tmg/L\n"
+        "Test\tResult\tUnit\tSpecimen\tMethod\nPBG\t3.0\tmg/L\tUrine\tMethod B",
+        "report",
+    )
+    view = build_rounding_view(bundle)
+    assert len(view["trends"]) == 3
+    assert {(row["specimen"], row["method"]) for row in view["trends"]} == {
+        ("Urine", "Method A"), ("Serum", "Method A"), ("Urine", "Method B")}
+    assert all(row["point_count"] == 1 and not row["chartable"] for row in view["trends"])
+    assert all(row["time_basis"] == "collection" for row in view["trends"])
+
+
+def test_independent_lab_tables_with_different_columns_are_both_parsed():
+    view = build_rounding_view(bundle_of(
+        "Date\tWBC\n2026-10-29\t8.2\nDate\tTest\tResult\tUnit\n"
+        "2026-10-30\tUrine ALA\t<1.0\tmg/L", "lab_other",
+    ))
+    assert {row["label"] for row in view["trends"]} == {"WBC", "Urine ALA"}
+    assert len([section for section in view["sources"][0]["sections"] if section["kind"] == "table"]) == 2
+
+
+def test_unknown_report_time_does_not_inherit_fetch_time_and_narrative_cannot_invent_labs():
+    view = build_rounding_view(bundle_of("Test\tResult\tUnit\nRare assay\t1.2\tmg/L\nCRP was high", "report"))
+    row = view["trends"][0]
+    assert row["label"] == "Rare assay" and row["time_basis"] == "unknown"
+    assert row["latest_known"] is None and row["unknown_values"][0]["time"] == ""
+    assert not row["chartable"] and len(view["trends"]) == 1
+
+
+def test_large_report_overview_is_deferred_without_silently_dropping_sources():
+    bundle = bundle_of("")
+    bundle.records = [SourceRecord("report", f"Synthetic report {i}", "Synthetic narrative.\n" * 9000)
+                      for i in range(150)]
+    bundle.coverage = {"report_loaded": 150, "report_details_complete": True}
+    view = build_rounding_view(bundle, include_content=False)
+    assert len(view["sources"]) == len(view["report_details"]) == 150
+    assert all(row["deferred"] and not row["content"] and not row["sections"] for row in view["sources"])
+    assert len(json.dumps(view)) < 500_000
+    assert view["coverage"]["report_loaded"] == 150
+
+
+def test_day_only_report_index_does_not_invent_midnight_or_order_with_same_day_precise_report():
+    bundle = bundle_of("")
+    bundle.records = [
+        SourceRecord("report", "Synthetic dated report", "Test\tResult\tUnit\nPBG\t1.0\tmg/L",
+                     observed_at=datetime(2026, 10, 30, tzinfo=EMR_TIMEZONE), observed_precision="day"),
+        SourceRecord("report", "Synthetic precise report", "Test\tResult\tUnit\nPBG\t2.0\tmg/L",
+                     observed_at=datetime(2026, 10, 30, 9, tzinfo=EMR_TIMEZONE), observed_precision="minute"),
+    ]
+    view = build_rounding_view(bundle)
+    assert view["sources"][0]["time"] == "2026-10-30"
+    row = view["trends"][0]
+    assert row["has_time_conflict"] and not row["chartable"] and row["latest_known"] is None
+    assert row["all_values"][0]["time_precision"] == "day"
+
+
+def test_horizontal_specimen_metadata_and_separate_collection_clock_are_preserved():
+    view = build_rounding_view(bundle_of(
+        "Specimen\tMethod\tCollection date\tCollection time\nUrine\tLC-MS/MS\t2026-10-29\t08:15\n"
+        "Test\tResult\tUnit\nPBG\t1.0\tmg/L", "report",
+    ))
+    row = view["trends"][0]
+    assert row["specimen"] == "Urine" and row["method"] == "LC-MS/MS"
+    assert row["time_basis"] == "collection"
+    assert row["latest_known"]["time"] == "2026-10-29 08:15"
+
+
+def test_result_collection_date_wins_over_report_date_and_pairs_only_matching_clock():
+    view = build_rounding_view(bundle_of(
+        "Collection date\tCollection time\tReport date\tTest\tResult\tUnit\n"
+        "2026-10-28\t08:15\t2026-10-30\tPBG\t1.0\tmg/L", "report",
+    ))
+    row = view["trends"][0]
+    assert row["time_basis"] == "collection"
+    assert row["latest_known"]["time"] == "2026-10-28 08:15"
+
+
+def test_new_specimen_section_does_not_inherit_old_collection_time_even_if_same_specimen():
+    bundle = bundle_of(
+        "Specimen: Urine\nCollection date: 2026-10-28\n"
+        "Test\tResult\tUnit\nPBG\t1.0\tmg/L\n"
+        "Specimen: Urine\nTest\tResult\tUnit\nPBG\t9.0\tmg/L", "report",
+    )
+    view = build_rounding_view(bundle)
+    assert len(view["trends"]) == 2
+    unknown = next(row for row in view["trends"] if row["time_basis"] == "unknown")
+    assert unknown["unknown_values"][0]["value"] == "9.0"
+    assert unknown["latest_known"] is None
+
+
+def test_empty_final_column_remains_aligned_through_header_cleanup():
+    view = build_rounding_view(bundle_of("Test\tResult\tUnit\nRare assay\tPositive\t", "report"))
+    assert view["trends"][0]["unknown_values"][0]["value"] == "Positive"
+    assert view["sources"][0]["sections"][0]["rows"][0] == ["Rare assay", "Positive", ""]
+
+
+def test_bare_assay_name_header_and_unknown_assays_survive_administrative_cleanup():
+    text = "Name\tResult\tUnit\nUncommon synthetic assay\t8.2\tmg/L\nAnother assay\tPositive\t"
+    view = build_rounding_view(bundle_of(text, "report"))
+    assert {row["label"] for row in view["trends"]} == {"Uncommon synthetic assay", "Another assay"}
+    assert view["sources"][0]["sections"][0]["headers"] == ["Name", "Result", "Unit"]

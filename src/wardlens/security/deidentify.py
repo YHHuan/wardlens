@@ -6,6 +6,7 @@ from datetime import datetime
 from hashlib import sha256
 
 from wardlens.models import PatientSummary
+from wardlens.security.headers import identifier_spans, unresolved_labels
 
 
 class DataLeakRisk(ValueError):
@@ -45,6 +46,29 @@ def _masked(value: str) -> str:
     return f"{value[0]}{'*' * min(6, len(value) - 2)}{value[-1]}"
 
 
+def clean_clinical_headers(text: str) -> tuple[str, tuple[Finding, ...]]:
+    """Remove recognized identifying/admin fields; keep real clinical dates.
+
+    Suitable for a local report view as well as prompt preparation. This is not
+    complete de-identification: narrative identifiers and uncertain leftovers
+    still need Deidentifier and its outbound residual scan. Finding offsets
+    refer to the supplied input, never to the shortened output.
+    """
+    spans = identifier_spans(text)
+    output = text
+    for span in reversed(spans):
+        output = output[:span.start] + output[span.end:]
+    findings = tuple(
+        Finding(span.kind, "[administrative field removed]", span.start, span.end)
+        for span in spans
+    )
+    # Keep row boundaries and interior spacing intact; only empty administrative
+    # lines need collapsing. Table columns have already been removed together.
+    output = re.sub(r"(?m)^[ \t|｜;；]+$", "", output)
+    output = re.sub(r"\n{3,}", "\n\n", output).strip(" \r\n")
+    return output, findings
+
+
 class Deidentifier:
     """Conservative deterministic redaction with a fail-closed residual scan.
 
@@ -58,15 +82,10 @@ class Deidentifier:
     _phone = re.compile(
         r"(?<!\d)(?:\+?886[-\s]?)?(?:0?9\d{2}[-\s]?\d{3}[-\s]?\d{3}|0\d{1,2}[-\s]?\d{3,4}[-\s]?\d{4})(?!\d)"
     )
-    _labeled_identifier_zh = re.compile(
-        r"(?im)(姓名|病歷號|病歷編號|身分證(?:字號)?|聯絡電話|手機|地址|床號|病床)"
-        r"[ \t]*[:：#]?[ \t]*([^\n|,;]{1,80})"
+    _url_identifier = re.compile(
+        r"(?i)(histno|hisid|phistnum|adistno|caseno|mrn|patient_?id|"
+        r"accession(?:_?(?:no|id))?|specimen_?(?:no|id)|report_?(?:no|id))=([^&\s]+)"
     )
-    _labeled_identifier_en = re.compile(
-        r"(?im)\b(patient\s*name|name|address|date\s*of\s*birth|dob|histno|mrn|mr\s*no\.?|chart\s*no\.?|medical\s*record\s*no\.?|patient\s*id)"
-        r"[ \t]*[:#][ \t]*([^\n|,;]{1,80})"
-    )
-    _url_identifier = re.compile(r"(?i)(histno|hisid|phistnum|adistno|caseno)=([^&\s]+)")
     _iso_date = re.compile(
         r"(?<!\d)(20\d{2}|19\d{2})[-/.](0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])(?!\d)"
     )
@@ -99,20 +118,14 @@ class Deidentifier:
         patient: PatientSummary | None = None,
         anchor_time: datetime | None = None,
     ) -> DeidentificationResult:
-        output = text.replace("\x00", "")
-        replacements: list[Finding] = []
+        output, header_findings = clean_clinical_headers(text.replace("\x00", ""))
+        replacements = list(header_findings)
         anchor = anchor_time or datetime.now().astimezone()
 
         if patient is not None:
-            term_kinds = (
-                (patient.histno, "known_histno"),
-                (patient.case_no, "known_case_no"),
-                (patient.name, "known_name"),
-                (patient.location, "known_location"),
-            )
+            term_kinds = self._known_patient_terms(patient)
             for value, kind in sorted(term_kinds, key=lambda item: len(item[0]), reverse=True):
-                value = value.strip()
-                if len(value) < 2 or value not in output:
+                if value not in output:
                     continue
                 output = output.replace(value, f"[{kind.upper()}_REMOVED]")
                 replacements.append(Finding(kind, _masked(value)))
@@ -127,14 +140,6 @@ class Deidentifier:
         replacements.extend(found)
         output, found = self._replace_pattern(output, self._phone, "phone", "[PHONE_REMOVED]")
         replacements.extend(found)
-
-        def replace_labeled(match: re.Match[str]) -> str:
-            label, value = match.group(1), match.group(2).strip()
-            replacements.append(Finding(f"labeled_{label}", _masked(value)))
-            return "[IDENTIFIER_REMOVED]"
-
-        output = self._labeled_identifier_zh.sub(replace_labeled, output)
-        output = self._labeled_identifier_en.sub(replace_labeled, output)
 
         def replace_url_identifier(match: re.Match[str]) -> str:
             replacements.append(Finding("identifier_in_url", _masked(match.group(2))))
@@ -154,7 +159,10 @@ class Deidentifier:
             lambda match: self._relative_date(match, anchor, replacements, roc=True), output
         )
         output = self._short_date.sub(
-            lambda match: self._relative_short_date(match, anchor, replacements), output
+            lambda match: (
+                match.group(0) if self._is_clinical_fraction(match)
+                else self._relative_short_date(match, anchor, replacements)
+            ), output
         )
         output = self._short_zh_date.sub(
             lambda match: self._relative_short_date(match, anchor, replacements), output
@@ -181,8 +189,6 @@ class Deidentifier:
             (self._legacy_arc, "legacy_arc"),
             (self._email, "email"),
             (self._phone, "phone"),
-            (self._labeled_identifier_zh, "labeled_identifier"),
-            (self._labeled_identifier_en, "labeled_identifier"),
             (self._url_identifier, "identifier_in_url"),
             (self._possible_long_id, "possible_long_identifier"),
             (self._possible_alphanumeric_id, "possible_alphanumeric_identifier"),
@@ -191,13 +197,40 @@ class Deidentifier:
             for match in pattern.finditer(scannable):
                 findings.append(Finding(kind, _masked(match.group(0)), *match.span()))
 
+        for span in (*identifier_spans(scannable), *unresolved_labels(scannable)):
+            findings.append(Finding(span.kind, "[labelled identifier]", span.start, span.end))
+
         if patient is not None:
-            for value in patient.redaction_terms():
+            for value, _ in self._known_patient_terms(patient):
                 for match in re.finditer(re.escape(value), scannable):
                     findings.append(
                         Finding("known_patient_identifier", _masked(value), *match.span())
                     )
         return findings
+
+    @staticmethod
+    def _known_patient_terms(patient: PatientSummary) -> tuple[tuple[str, str], ...]:
+        """Only specific locations can be safely replaced without a field label.
+
+        A numeric bed/ward such as 01, 101 or 101-01 also occurs inside doses,
+        laboratory values and calendar dates. A short text location such as ICU
+        may be clinical content. Their labelled fields are still removed by the
+        header cleaner; the literal residual scan must use the same restriction.
+        """
+        terms: list[tuple[str, str]] = []
+        for raw, kind in (
+            (patient.histno, "known_histno"),
+            (patient.case_no, "known_case_no"),
+            (patient.name, "known_name"),
+            (patient.location, "known_location"),
+        ):
+            value = raw.strip()
+            if len(value) < 2:
+                continue
+            if kind == "known_location" and (len(value) < 4 or not any(character.isalpha() for character in value)):
+                continue
+            terms.append((value, kind))
+        return tuple(terms)
 
     @staticmethod
     def mask_findings(text: str, findings: list[Finding] | tuple[Finding, ...]) -> str:
@@ -223,6 +256,27 @@ class Deidentifier:
         if risks:
             kinds = ", ".join(sorted({risk.kind for risk in risks}))
             raise DataLeakRisk(f"Outbound text is blocked; residual identifier risk: {kinds}")
+
+    @staticmethod
+    def _is_clinical_fraction(match: re.Match[str]) -> bool:
+        """Do not turn dose fractions, scales or ranges into calendar dates."""
+        before = match.string[max(0, match.start() - 45):match.start()]
+        after = match.string[match.end():match.end() + 35]
+        # Dates with an explicit date label stay dates even inside clinical notes.
+        if re.search(r"(?:date|日期|時間|採檢|報告|collected|reported)\s*[:：]?\s*$", before, re.I):
+            return False
+        if re.match(
+            r"\s*(?:tab(?:let)?s?|caps?(?:ules?)?|vials?|ampoules?|錠|顆|粒|包|管|mg|mcg|µg|g\b|mL|L\b|units?|IU|mmol|mEq|分|points?\b|strength\b)",
+            after, re.I,
+        ):
+            return True
+        if re.search(
+            r"(?:pain|疼痛|痛分|肌力|muscle(?:\s+power|\s+strength)?|strength|motor|power|score|scale|grade|GCS|NYHA|ECOG|dose|dosage|劑量|take|服用|給予|分數)[^\n;；:：]*[:：]?\s*$",
+            before, re.I,
+        ):
+            return True
+        # Explicit fraction notation and ranges such as q 6-8 h are not dates.
+        return bool(re.match(r"\s*(?:hours?|hrs?|h\b|days?|weeks?|小時|天|週)\b", after, re.I))
 
     @staticmethod
     def _replace_pattern(

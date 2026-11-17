@@ -63,6 +63,8 @@ class SourceRecord:
     fetched_at: datetime = field(default_factory=utc_now)
     status: str = ""
     content_sha256: str = ""
+    # Preserve date-only report indexes instead of inventing a midnight time.
+    observed_precision: str = ""
 
     def __post_init__(self) -> None:
         if not self.content_sha256:
@@ -80,6 +82,8 @@ class PatientBundle:
     fetched_at: datetime = field(default_factory=utc_now)
     warnings: list[str] = field(default_factory=list)
     lookback_months: int | None = None
+    # Missing keys mean not assessed, rather than a verified count of zero.
+    coverage: dict[str, Any] = field(default_factory=dict)
 
     def records_of(self, *source_types: str) -> list[SourceRecord]:
         wanted = set(source_types)

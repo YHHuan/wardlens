@@ -63,6 +63,8 @@ class SourceRecord:
     fetched_at: datetime = field(default_factory=utc_now)
     status: str = ""
     content_sha256: str = ""
+    # Preserve date-only report indexes instead of inventing a midnight time.
+    observed_precision: str = ""
 
     def __post_init__(self) -> None:
         if not self.content_sha256:

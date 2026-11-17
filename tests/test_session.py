@@ -10,6 +10,7 @@ import pytest
 
 from wardlens.config import AppSettings
 from wardlens.llm.openrouter import OpenRouterError, StreamEvent
+from wardlens.models import EMR_TIMEZONE, PatientBundle, SourceRecord
 from wardlens.security.secrets import MemorySecretStore
 from wardlens.services.ai import AIWorkflowService
 from wardlens.services.session import ClinicalSession, UserError
@@ -61,6 +62,137 @@ def choose_demo(session):
     session.action("search", {"doctor_id": "", "ward": "", "histnos": ""})
     finish(session)
     session.action("select", {"epoch": session.epoch, "patient_id": "patient-1"})
+
+
+def test_loaded_inputs_are_automatically_redacted_and_manual_scan_invalidates_preview(session):
+    choose_demo(session)
+    record = SourceRecord("report", "Synthetic report", "Patient Name: Private Person\nMRN: 81234567\n"
+                          "Test Name\tResult\tUnit\nPorphobilinogen\t1.2\tmg/L")
+    bundle = PatientBundle(session.current_patient, records=[record],
+                           fetched_at=datetime(2026, 10, 30, 12, tzinfo=EMR_TIMEZONE))
+    session.bundles[session.current_patient.local_key] = bundle
+    session._fill(bundle)
+    for item in session.drafts.values():
+        assert item["privacy"]["automatic"]
+        assert "Private Person" not in item["data"] and "81234567" not in item["data"]
+        assert "Porphobilinogen" in item["data"]
+    prepared = preview(session, data="Private Person CRP 2 mg/L", question="Patient Name: New Person\nTrend?")
+    assert not session.drafts["rounding"]["privacy"]["automatic"]
+    session.action("deidentify", prepared)
+    assert session.drafts["rounding"]["privacy"]["automatic"]
+    assert "New Person" not in session.drafts["rounding"]["question"]
+    assert not session.previews and not session.ai.client.calls
+    with pytest.raises(UserError, match="輸入已變更"):
+        session.action("generate", prepared)
+
+
+def test_source_detail_and_fulltext_search_are_local_and_bound_to_current_epoch(session):
+    choose_demo(session)
+    record = SourceRecord("report", "Synthetic report", "Patient Name: Private Person\nMRN: 81234567\n"
+                          "Test Name\tResult\tUnit\nPorphobilinogen\t1.2\tmg/L")
+    session.bundles[session.current_patient.local_key] = PatientBundle(session.current_patient, [record])
+    body = {"epoch": session.epoch, "source_id": "SRC-001"}
+    detail = session.action("source_detail", body)["source"]
+    assert detail["content"] == record.content
+    assert "Private Person" not in json.dumps(detail["sections"])
+    search = session.action("source_search", {"epoch": session.epoch, "query": "porphobilinogen"})
+    assert search["total"] == 1 and search["matches"][0]["id"] == "SRC-001"
+    assert "Private Person" not in search["matches"][0]["snippet"]
+    assert session.action("source_search", {"epoch": session.epoch, "query": "81234567"})["total"] == 0
+    with pytest.raises(UserError):
+        session.action("source_detail", dict(body, source_id="SRC-999"))
+    session.action("select", {"epoch": session.epoch, "patient_id": "patient-2"})
+    with pytest.raises(UserError, match="病人或資料"):
+        session.action("source_detail", body)
+    assert not session.ai.client.calls
+
+
+def test_cancel_load_preserves_partial_bundle_and_does_not_claim_success(session):
+    choose_demo(session)
+    started = threading.Event()
+
+    def fetch(patient):
+        session._fetch_progress("已讀取 1 份報告")
+        started.set()
+        assert session._cancel.wait(3)
+        return PatientBundle(patient, [SourceRecord("report", "Synthetic report", "Synthetic content")],
+                             coverage={"cancelled": True, "report_loaded": 1, "report_details_complete": False})
+
+    session.adapter.fetch_patient_bundle = fetch
+    session.action("load", {"epoch": session.epoch, "months": 12})
+    assert started.wait(1)
+    assert session.state()["status"] == "已讀取 1 份報告"
+    session.action("cancel", {})
+    deadline = time.monotonic() + 3
+    while session.busy and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert not session.busy and session.job["status"] == "cancelled"
+    assert session.job["result"]["partial"] and session.current_bundle.coverage["cancelled"]
+    assert "Synthetic content" in session.drafts["rounding"]["data"]
+    assert not session.ai.client.calls
+
+
+def test_redacted_draft_and_new_question_share_snapshot_date_anchor(session):
+    choose_demo(session)
+    bundle = PatientBundle(session.current_patient,
+        [SourceRecord("report", "Synthetic report", "Collection date: 2026-10-30\nSynthetic result")],
+        fetched_at=datetime(2026, 10, 30, 23, tzinfo=EMR_TIMEZONE))
+    session.bundles[session.current_patient.local_key] = bundle
+    session._fill(bundle)
+    auto_data = session.drafts["rounding"]["data"]
+    result = session.action("prepare", draft(session, data=auto_data, question="Compare on 2026-10-30"))
+    assert "Compare on D0" in result["user"]
+    assert "Collection date: D0" in result["user"]
+
+
+def test_refresh_across_midnight_rebases_existing_question_dates_to_new_snapshot(session):
+    choose_demo(session)
+    bundle = PatientBundle(session.current_patient,
+        [SourceRecord("report", "Synthetic report", "Fever began on 2026-10-30")],
+        fetched_at=datetime(2026, 10, 30, 23, tzinfo=EMR_TIMEZONE))
+    session.bundles[session.current_patient.local_key] = bundle
+    draft(session, question="Fever began on 2026-10-30. Check D-1 too.")
+    session._fill(bundle)
+    assert session.drafts["rounding"]["question"] == "Fever began on D0. Check D-1 too."
+    bundle.fetched_at += timedelta(days=1)
+    session._fill(bundle)
+    assert session.drafts["rounding"]["question"] == "Fever began on D-1. Check D-2 too."
+    assert "Fever began on D-1" in session.drafts["rounding"]["data"]
+
+
+def test_large_trends_are_compact_in_state_and_complete_on_explicit_detail(session):
+    choose_demo(session)
+    session._presenter = None
+    rows = ["Date\tHR (bpm)\tRR (/min)\tSpO2 (%)"]
+    start = datetime(2026, 1, 1, tzinfo=EMR_TIMEZONE)
+    rows.extend(f"{(start + timedelta(hours=i)).isoformat()}\t80\t16\t98" for i in range(5000))
+    bundle = PatientBundle(session.current_patient, [SourceRecord("vital_signs", "Synthetic year", "\n".join(rows))])
+    session.bundles[session.current_patient.local_key] = bundle
+    session.overview = session._view(bundle)
+    compact = session.state()["overview"]
+    assert len(json.dumps(compact)) < 25_000
+    assert all(row["point_count"] == 5000 and row["deferred"] and not row["all_values"] for row in compact["vitals"])
+    key = compact["vitals"][0]["id"]
+    full = session.action("trend_detail", {"epoch": session.epoch, "trend_id": key})["trend"]
+    assert len(full["all_values"]) == 5000 and full["all_values"][0]["value"] == "80"
+    old_epoch = session.epoch
+    session.action("load", {"epoch": session.epoch, "months": 12})
+    finish(session)
+    assert session.epoch > old_epoch
+    with pytest.raises(UserError, match="病人或資料"):
+        session.action("trend_detail", {"epoch": old_epoch, "trend_id": key})
+
+
+def test_readonly_report_access_remains_available_while_ai_generates(session):
+    choose_demo(session)
+    session.action("load", {"epoch": session.epoch, "months": 12})
+    finish(session)
+    prepared = preview(session)
+    session.ai.client.wait = threading.Event()
+    session.action("generate", prepared)
+    result = session.action("source_detail", {"epoch": session.epoch, "source_id": "SRC-001"})
+    assert result["source"]["type"] == "admission_note"
+    session.action("cancel", {})
 
 
 def draft(session, workspace="rounding", **updates):

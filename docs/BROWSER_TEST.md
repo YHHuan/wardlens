@@ -1,6 +1,6 @@
 # 瀏覽器相容性測試
 
-v0.7.0 的本機網頁工作台直接使用瀏覽器，**不需要 WebDriver，也不必先跑這項測試**；病歷擷取仍使用原本的 Requests 流程。網頁的開啟／重開與桌面備援見 [本機工作台](LOCAL_UI.md)。
+v0.8.0 的本機網頁工作台直接使用瀏覽器，**不需要 WebDriver，也不必先跑這項測試**；病歷擷取仍使用原本的 Requests 流程。網頁的開啟／重開與桌面備援見 [本機工作台](LOCAL_UI.md)。
 
 本頁是 v0.6.0 起提供的獨立測試，確認電腦是否能啟動 Edge WebDriver、讀取中文、讀取 18 列表格、點擊按鈕並等候動態更新。它使用 Selenium 同樣採用的 W3C WebDriver 介面，沒有內附 Selenium Python SDK，也尚未把 EMR 抓取改成瀏覽器操作。這項 PASS 不能當成整套 Selenium EMR 已驗收。
 

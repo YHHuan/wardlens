@@ -155,12 +155,23 @@ def test_history_default_upgrade_preserves_custom_models_and_prompts(tmp_path) -
         encoding="utf-8",
     )
     settings = AppSettings.load(path)
-    assert settings.lab_lookback_months == 3
+    assert settings.lab_lookback_months == 12
     assert settings.profile("fast").model == "openai/intentional-pin"
     assert settings.custom_prompts["rounding"] == prompt.strip()
     settings.lab_lookback_months = 6
     settings.save(path)
     assert AppSettings.load(path).lab_lookback_months == 6
+
+
+def test_one_year_default_migrates_once_and_preserves_later_three_month_choice(tmp_path):
+    path = tmp_path / "settings.json"
+    assert AppSettings().lab_lookback_months == 12
+    path.write_text(json.dumps({"lab_lookback_months": 3, "history_window_version": 1}))
+    loaded = AppSettings.load(path)
+    assert loaded.lab_lookback_months == 12
+    loaded.lab_lookback_months = 3
+    loaded.save(path)
+    assert AppSettings.load(path).lab_lookback_months == 3
 
 
 def test_audit_contains_only_bounded_metadata(tmp_path) -> None:

@@ -89,6 +89,24 @@ def test_selection_table_is_not_treated_as_completed_report(monkeypatch):
     assert not current.coverage["report_details_complete"]
 
 
+def test_report_preserves_sibling_pre_sections_and_empty_final_table_column(monkeypatch):
+    adapter, current = VGHReadOnlyAdapter(), bundle()
+
+    def fetch(url):
+        if "tmonth=" in url:
+            return _FetchedPage(report_index([("Panel", "2026/10/15", "?action=findRes&report=1")]), url)
+        return _FetchedPage("<body><pre>Synthetic introduction</pre>"
+            "<table><tr><th>Test</th><th>Result</th><th>Unit</th></tr>"
+            "<tr><td>Rare assay</td><td>Positive</td><td></td></tr></table>"
+            "<pre>Synthetic second narrative</pre></body>", url)
+
+    monkeypatch.setattr(adapter, "_get", fetch)
+    adapter._fetch_report_history(current, _RequestBudget(10))
+    content = current.records_of("report")[0].content
+    assert "Synthetic introduction" in content and "Synthetic second narrative" in content
+    assert "Rare assay\tPositive\t\n" in content
+
+
 @pytest.mark.parametrize(
     "href",
     [

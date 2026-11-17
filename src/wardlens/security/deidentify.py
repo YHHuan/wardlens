@@ -65,7 +65,7 @@ def clean_clinical_headers(text: str) -> tuple[str, tuple[Finding, ...]]:
     # Keep row boundaries and interior spacing intact; only empty administrative
     # lines need collapsing. Table columns have already been removed together.
     output = re.sub(r"(?m)^[ \t|｜;；]+$", "", output)
-    output = re.sub(r"\n{3,}", "\n\n", output).strip()
+    output = re.sub(r"\n{3,}", "\n\n", output).strip(" \r\n")
     return output, findings
 
 

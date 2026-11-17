@@ -7,6 +7,7 @@ from tkinter.scrolledtext import ScrolledText
 
 from wardlens.llm.prompts import PromptBuilder
 from wardlens.models import EMR_TIMEZONE, PatientBundle
+from wardlens.security.deidentify import Deidentifier
 
 
 class ClinicalWorkspace(ttk.Frame):
@@ -87,11 +88,17 @@ class ClinicalWorkspace(ttk.Frame):
 
     def load_bundle(self, bundle: PatientBundle) -> None:
         self.bundle = bundle
-        self._replace(self.data_text, PromptBuilder().editor_context(bundle))
+        cleaned = Deidentifier().deidentify(
+            PromptBuilder().editor_context(bundle), patient=bundle.patient,
+            anchor_time=bundle.fetched_at.astimezone(EMR_TIMEZONE),
+        )
+        self._replace(self.data_text, cleaned.text)
         self._replace(self.result_text, "")
         self.dirty = False
         when = bundle.fetched_at.astimezone(EMR_TIMEZONE).strftime("%m/%d %H:%M")
-        self.data_status.set(f"已帶入 {when} 的病人資料；可直接編輯，重新抓取才會更新。")
+        self.data_status.set(
+            f"已帶入 {when} 的資料並自動去識別化；{len(cleaned.residual_risks)} 處待核對。可直接編輯。"
+        )
         self.on_change()
 
     def clear_data(self) -> None:

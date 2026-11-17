@@ -23,8 +23,8 @@ from wardlens.emr.vgh import VGHReadOnlyAdapter
 from wardlens.llm.oauth import OpenRouterOAuth
 from wardlens.llm.openrouter import OpenRouterError
 from wardlens.llm.prompts import PromptBuilder, PromptEnvelope
-from wardlens.models import PatientBundle, PatientSummary
-from wardlens.security.deidentify import DataLeakRisk
+from wardlens.models import EMR_TIMEZONE, PatientBundle, PatientSummary
+from wardlens.security.deidentify import DataLeakRisk, clean_clinical_headers
 from wardlens.security.outbound import PreviewBlocked
 from wardlens.security.secrets import CredentialSecretStore, SecretStoreError
 from wardlens.services.ai import AIWorkflowService, PreparedRequest
@@ -66,7 +66,8 @@ def _empty_answer() -> dict:
 
 def _empty_drafts() -> dict:
     return {name: {"data": "", "question": "", "workflow": name,
-                   "profile": "emergency_fast" if name == "emergency" else "fast", "revision": 0}
+                   "profile": "emergency_fast" if name == "emergency" else "fast", "revision": 0,
+                   "privacy": {"automatic": False, "replacement_count": 0, "residual_count": 0}}
             for name in ("rounding", "emergency")}
 
 
@@ -79,12 +80,14 @@ class ClinicalSession:
         self.ai = ai or AIWorkflowService(builder=PromptBuilder(self.settings.custom_prompts))
         self.secret_store = secret_store or CredentialSecretStore()
         self.oauth = oauth or OpenRouterOAuth()
-        self._adapter_factory = adapter_factory or (
-            lambda demo: DemoEMRAdapter() if demo else VGHReadOnlyAdapter(self.settings))
-        self.adapter = self._adapter_factory(self.settings.demo_mode)
-        self._presenter = presenter
         self._lock = threading.RLock()
         self._cancel = threading.Event()
+        self._trend_rows: dict[str, dict] = {}
+        self._adapter_factory = adapter_factory or (
+            lambda demo: DemoEMRAdapter() if demo else VGHReadOnlyAdapter(
+                self.settings, cancel_event=self._cancel, progress=self._fetch_progress))
+        self.adapter = self._adapter_factory(self.settings.demo_mode)
+        self._presenter = presenter
         self._closed = False
         self._key = ""
         self.epoch = 0
@@ -159,6 +162,7 @@ class ClinicalSession:
         self.answers = {name: _empty_answer() for name in self.drafts}
         self._invalidate()
         self.overview = None
+        self._trend_rows.clear()
         if patients:
             self.patients.clear()
             self.bundles.clear()
@@ -167,17 +171,55 @@ class ClinicalSession:
         self.job = None
 
     def _view(self, bundle: PatientBundle) -> dict:
+        self._trend_rows.clear()
         if self._presenter:
             return self._presenter(bundle)
         from wardlens.services.rounding import build_rounding_view
 
-        return build_rounding_view(bundle)
+        view = build_rounding_view(bundle, include_content=False)
+        for group in ("vitals", "trends"):
+            compact = []
+            for row in view[group]:
+                key = f"trend-{len(self._trend_rows) + 1}"
+                self._trend_rows[key] = dict(row, id=key)
+                compact.append(dict(row, id=key, deferred=True, all_values=[],
+                                    unknown_count=len(row["unknown_values"]),
+                                    unknown_values=row["unknown_values"][:5]))
+            view[group] = compact
+        return view
+
+    def _fetch_progress(self, message: str) -> None:
+        with self._lock:
+            if not self._closed and self.busy and self.job and self.job["kind"] == "load":
+                self.status = message
+
+    def _redact_inputs(self, data: str, question: str, bundle: PatientBundle | None = None) -> dict:
+        bundle = bundle or self.current_bundle
+        anchor = (bundle.fetched_at if bundle else datetime.now(UTC)).astimezone(EMR_TIMEZONE)
+        results = [self.ai.guard.deidentifier.deidentify(text, patient=self.current_patient,
+                                                       anchor_time=anchor) for text in (data, question)]
+        return {"data": results[0].text, "question": results[1].text, "date_anchor": anchor.date().isoformat(),
+                "privacy": {"automatic": True,
+                            "replacement_count": sum(len(r.replacements) for r in results),
+                            "residual_count": sum(len(r.residual_risks) for r in results)}}
 
     def _fill(self, bundle: PatientBundle) -> None:
         self.overview = self._view(bundle)
         context = self.ai.builder.editor_context(bundle)
+        header_removals = sum(len(clean_clinical_headers(text)[1]) for record in bundle.records
+                              for text in (record.title, record.content))
         for name, draft in self.drafts.items():
-            draft["data"] = context
+            question = draft["question"]
+            if draft.get("date_anchor"):
+                previous = datetime.fromisoformat(draft["date_anchor"]).date()
+                shift = (previous - bundle.fetched_at.astimezone(EMR_TIMEZONE).date()).days
+                if shift:
+                    def rebase(match, shift=shift):
+                        day = int(match[1]) + shift
+                        return f"D{day:+d}" if day else "D0"
+                    question = re.sub(r"(?<![\w])D([+-]\d+|0)(?![\w])", rebase, question)
+            draft.update(self._redact_inputs(context, question, bundle))
+            draft["privacy"]["replacement_count"] += header_removals
             draft["revision"] += 1
             self.answers[name] = _empty_answer()
         self._invalidate()
@@ -232,7 +274,8 @@ class ClinicalSession:
             except Exception as exc:
                 with self._lock:
                     if not self._closed and self.epoch == epoch:
-                        message = "生成已停止；以上內容不完整。" if self._cancel.is_set() else self._safe_error(exc)
+                        message = ("資料載入已停止；未完成的來源不能視為沒有資料。" if kind == "load"
+                                   else "生成已停止；以上內容不完整。") if self._cancel.is_set() else self._safe_error(exc)
                         self.job.update(status="cancelled" if self._cancel.is_set() else "failed", error=message)
                         self.status = message
                         if workspace:
@@ -256,16 +299,18 @@ class ClinicalSession:
             if not isinstance(body, dict):
                 raise UserError("請使用 JSON object。")
             if name == "cancel":
-                if self.busy and self.job and self.job["kind"] == "generate":
+                if self.busy and self.job and self.job["kind"] in {"generate", "load"}:
                     self._cancel.set()
-                    self.ai.client.cancel()
-                    self.status = "正在停止生成…"
+                    if self.job["kind"] == "generate":
+                        self.ai.client.cancel()
+                    self.status = "正在停止；已送出的請求結束後不再繼續…"
                 return {}
             if name == "close":
                 self.close()
                 return {}
-            if self.busy:
-                raise UserError("工作進行中，請等待完成或先停止生成。", 409)
+            read_during_generation = name in {"source_detail", "source_search", "trend_detail"} and self.job and self.job["kind"] == "generate"
+            if self.busy and not read_during_generation:
+                raise UserError("工作進行中，請等待完成或先停止目前工作。", 409)
             handler = getattr(self, "_action_" + name, None)
             if handler is None or not re.fullmatch(r"[a-z_]{1,40}", name):
                 raise UserError("未知操作。")
@@ -327,9 +372,13 @@ class ClinicalSession:
         patient = self.current_patient
 
         def apply(bundle):
+            if not bundle.records and bundle.coverage.get("cancelled"):
+                return {"partial": True}
             self.bundles[patient.local_key] = bundle
             self._fill(bundle)
-            return {}
+            # Reused source IDs refer to a new snapshot even for the same patient.
+            self.epoch += 1
+            return {"partial": bool(bundle.coverage.get("cancelled"))}
 
         return self._job("load", lambda: self.adapter.fetch_patient_bundle(patient), apply)
 
@@ -343,13 +392,59 @@ class ClinicalSession:
         if candidate["profile"] not in DEFAULT_PROFILES or candidate["workflow"] not in (
             {"emergency"} if name == "emergency" else {"rounding", "admission", "qa"}):
             raise UserError("模型路由或工作類型不符。")
-        if revision < old["revision"] or (revision == old["revision"] and candidate != old):
+        previous = {key: old[key] for key in candidate}
+        if revision < old["revision"] or (revision == old["revision"] and candidate != previous):
             raise UserError("較新的輸入已儲存，請重新確認目前畫面。", 409)
-        if candidate != old:
+        if candidate != previous:
+            candidate["privacy"] = {"automatic": False, "replacement_count": 0, "residual_count": 0}
+            candidate["date_anchor"] = old.get("date_anchor", "")
             self.drafts[name] = candidate
             self._invalidate(name)
             self.answers[name] = _empty_answer()
         return {"revision": revision}
+
+    def _action_deidentify(self, body: dict) -> dict:
+        name = self._workspace(body)
+        draft = self.drafts[name]
+        draft.update(self._redact_inputs(draft["data"], draft["question"]))
+        draft["revision"] += 1
+        self._invalidate(name)
+        self.answers[name] = _empty_answer()
+        return {"revision": draft["revision"], "privacy": draft["privacy"]}
+
+    def _action_source_detail(self, body: dict) -> dict:
+        self._require_epoch(body)
+        source_id = _text(body, "source_id", 40)
+        if self.current_bundle:
+            from wardlens.services.rounding import source_view
+
+            for key, record in self.current_bundle.source_map():
+                if key == source_id:
+                    return {"source": source_view(key, record)}
+        raise UserError("目前病人沒有這份來源，請重新選取。", 404)
+
+    def _action_trend_detail(self, body: dict) -> dict:
+        self._require_epoch(body)
+        row = self._trend_rows.get(_text(body, "trend_id", 40))
+        if row is None:
+            raise UserError("目前資料沒有這個檢驗趨勢，請重新選取。", 404)
+        return {"trend": row}
+
+    def _action_source_search(self, body: dict) -> dict:
+        self._require_epoch(body)
+        query = _text(body, "query", 200).strip().casefold()
+        if len(query) < 2:
+            raise UserError("請輸入至少 2 個字的搜尋詞。")
+        matches = []
+        if self.current_bundle:
+            for key, record in self.current_bundle.source_map():
+                cleaned, _ = clean_clinical_headers(record.content)
+                title, _ = clean_clinical_headers(record.title)
+                position = cleaned.casefold().find(query)
+                if position >= 0 or query in title.casefold():
+                    start = max(0, position - 50)
+                    matches.append({"id": key, "snippet": cleaned[start:start + 220]})
+        return {"matches": matches, "total": len(matches)}
 
     def _prepare(self, name: str, envelope: PromptEnvelope) -> dict:
         draft = self.drafts[name]
@@ -362,7 +457,9 @@ class ClinicalSession:
             parsed = PromptEnvelope.parse(exc.result.text)
             self.blocked[name] = {"epoch": self.epoch, "revision": draft["revision"]}
             return {"blocked": True, "system": parsed.system, "user": parsed.user,
-                    "risks": sorted({r.kind for r in exc.result.residual_risks}), "error": str(exc)}
+                    "risks": sorted({r.kind for r in exc.result.residual_risks}), "error": str(exc),
+                    "deidentification": {"checked": True, "replacement_count": len(exc.result.replacements),
+                                         "residual_count": len(exc.result.residual_risks)}}
         profile = self.settings.profile(draft["profile"])
         preview_id = secrets.token_urlsafe(24)
         self.previews[name] = {"id": preview_id, "prepared": prepared, "epoch": self.epoch,
@@ -372,7 +469,9 @@ class ClinicalSession:
                 "clinical": self.ai.builder.clinical_preview(parsed), "system": parsed.system,
                 "user": parsed.user, "model": profile.model, "snapshot_age_minutes": self._age(prepared),
                 "slow": name == "emergency" and profile.key in DEEP_PROFILES,
-                "require_zdr": self.settings.require_zdr}
+                "require_zdr": self.settings.require_zdr,
+                "deidentification": {"checked": True, "replacement_count": prepared.preview.replacement_count,
+                                     "residual_count": 0}}
 
     def _action_prepare(self, body: dict) -> dict:
         name = self._workspace(body)

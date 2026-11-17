@@ -403,7 +403,11 @@ def report_content(soup: BeautifulSoup) -> Tag | BeautifulSoup | None:
     if soup.find(id=re.compile(r"^(?:reslist|patlist)$", re.I)):
         return None
     if soup.find("pre"):
-        return soup.find("pre")
+        # A single report can contain several narrative sections and result
+        # tables outside its first pre. Retain the recognized document body.
+        for unwanted in soup.find_all(["nav", "script", "style"]):
+            unwanted.decompose()
+        return soup.body if soup.body is not None else soup
     for table in soup.find_all("table"):
         for row in table.find_all("tr", limit=3):
             labels = [

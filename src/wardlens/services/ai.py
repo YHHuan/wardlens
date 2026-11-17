@@ -7,7 +7,7 @@ from threading import Event
 
 from wardlens.llm.openrouter import OpenRouterClient, StreamEvent
 from wardlens.llm.prompts import PromptBuilder, PromptEnvelope
-from wardlens.models import LLMResult, ModelProfile, PatientBundle, PatientSummary
+from wardlens.models import EMR_TIMEZONE, LLMResult, ModelProfile, PatientBundle, PatientSummary
 from wardlens.security.audit import AuditEvent, HashOnlyAuditLog
 from wardlens.security.outbound import ApprovedPreview, OutboundGuard
 
@@ -72,7 +72,8 @@ class AIWorkflowService:
     ) -> PreparedRequest:
         """Recheck a locally edited draft; this cannot send or bypass the guard."""
         raw = PromptEnvelope.parse(text).canonical()
-        preview = self.guard.prepare(raw, patient=patient)
+        anchor = source_fetched_at.astimezone(EMR_TIMEZONE) if source_fetched_at else None
+        preview = self.guard.prepare(raw, patient=patient, anchor_time=anchor)
         # Parse now as a structural integrity check, before the preview reaches UI.
         self.guard.verify(preview, PromptEnvelope.parse(preview.text).canonical(), patient)
         self._audit("preview_created", preview.sha256, outcome="success")

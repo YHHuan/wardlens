@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
+from wardlens import __version__
 from wardlens.browser_probe import _find_edge, _WebDriver
 from wardlens.config import AppSettings
 from wardlens.llm.openrouter import StreamEvent
@@ -120,7 +121,7 @@ def main():
                 (args.screenshots / name).write_bytes(base64.b64decode(encoded))
 
             web.call("POST", session + "/url", {"url": server.url})
-            until("document.querySelector('#version').textContent.includes('0.7')", "App did not connect")
+            until("document.querySelector('#version').textContent.includes('" + __version__ + "')", "App did not connect")
             assert js("return location.hash") == ""
             assert js("return localStorage.length + sessionStorage.length") == 0
             if not js("return document.querySelector('#demo').checked"):
@@ -134,10 +135,11 @@ def main():
             click("#load-patient")
             until("document.querySelector('#overview table') && !document.querySelector('#load-patient').disabled", "Load failed")
             until("document.querySelector('#rounding-data').value.includes('CRP')", "Loaded drafts not adopted")
-            labels = js("return [...document.querySelectorAll('#overview .trend-section:first-of-type .trend-label')].map(n=>n.firstChild.textContent)")
-            # Sections preceding the table can affect :first-of-type; use the first trend table explicitly.
-            if not labels:
-                labels = js("return [...document.querySelector('#overview .trend-section').querySelectorAll('.trend-label')].map(n=>n.firstChild.textContent)")
+            assert js("return document.querySelector('#lookback').value") == "12"
+            assert "自動去識別已處理" in js("return document.querySelector('#rounding-privacy').textContent")
+            assert "90000001" not in js("return document.querySelector('#rounding-data').value")
+            assert "測試甲" not in js("return document.querySelector('#rounding-data').value")
+            labels = js("return [...document.querySelector('#overview .lab-group').querySelectorAll('.trend-label')].map(n=>n.firstChild.textContent)")
             assert labels[:3] == ["WBC", "Hb", "PLT"], labels
             assert "ceftriaxone" in js("return document.querySelector('#overview').textContent")
             assert js("return document.querySelectorAll('.vital').length") >= 5
@@ -145,7 +147,34 @@ def main():
             capture("01-rounding-synthetic.png")
             print(f"PASS Edge {version}: demo login, 18 patients, load, CBC order, vital times, 1366px layout")
 
+            fill("#lab-filter", "Porphobilinogen")
+            click('button[aria-label^="展開 Porphobilinogen"]')
+            until("document.querySelector('.trend-chart')", "Rare-test full chart missing")
+            assert js("return document.querySelectorAll('.trend-chart .chart-point').length") == 2
+            assert "報告時間" in js("return document.querySelector('.trend-chart').textContent")
+            js("document.querySelector('.trend-chart').scrollIntoView({block:'center'})")
+            capture("05-rare-trend-synthetic.png")
+            fill(".report-browser input", "porphyrin")
+            click(".report-browser .data-toolbar button")
+            until("document.querySelector('.report-browser .result-count').textContent.includes('全文搜尋')", "Local full-text search failed")
+            assert js("return document.querySelector('.report-browser').querySelectorAll('.source-record').length") == 2
+            click(".report-browser .source-record summary")
+            until("document.querySelector('.report-browser .report-table')", "Deferred report table failed")
+            clean_report = js("return [...document.querySelectorAll('.report-browser .report-text,.report-browser .report-table')].map(n=>n.textContent).join(' ')")
+            assert "Porphobilinogen" in clean_report and "Urine" in clean_report
+            assert "90000001" not in clean_report and "測試甲" not in clean_report
+            assert provider.calls == 0
+            js("document.querySelector('.report-browser .report-table').scrollIntoView({block:'center'})")
+            capture("04-rare-report-synthetic.png")
+            print("PASS one-year default, automatic draft cleanup, rare-test chart, local full-text search and cleaned report table")
+
             click("#tab-rounding .context-editor summary")
+            fill("#rounding-data", "Patient Name: Private Demo\nMRN: 81234567\nSynthetic CRP 2 mg/L")
+            fill("#rounding-question", "Patient Name: Another Demo\nTrend?")
+            click("#rounding-deidentify")
+            until("!document.querySelector('#rounding-data').value.includes('81234567') && document.querySelector('#rounding-data').value.includes('Synthetic CRP')", "Repeat cleanup not adopted")
+            assert "Another Demo" not in js("return document.querySelector('#rounding-question').value")
+            assert provider.calls == 0
             fill("#rounding-data", "Synthetic CRP 15.2 → 11.4 → 7.8 mg/dL over 2 days.")
             fill("#rounding-question", "請簡短整理合成趨勢")
             time.sleep(0.6)

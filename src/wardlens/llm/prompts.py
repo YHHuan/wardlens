@@ -199,7 +199,8 @@ class PromptBuilder:
             if record.source_type.startswith("lab_") or record.source_type in {"report", "report_index", "vital_signs"}:
                 coverage = coverage_summary(record, relative_to=None if editor else anchor) + "\n"
             if editor:
-                when = record.observed_at.astimezone(EMR_TIMEZONE).strftime("%Y-%m-%d %H:%M") if record.observed_at else "來源時間未建立"
+                date_format = "%Y-%m-%d" if record.observed_precision == "day" else "%Y-%m-%d %H:%M"
+                when = record.observed_at.astimezone(EMR_TIMEZONE).strftime(date_format) if record.observed_at else "來源時間未建立"
                 prefix = f"\n[{source_id}] {title}｜{record.source_type[:64]}｜{when}｜{status or '狀態未建立'}\n{coverage}"
                 sources.append((prefix, content, ""))
             else:

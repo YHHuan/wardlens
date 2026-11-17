@@ -158,7 +158,7 @@ td{font-variant-numeric:tabular-nums}
 .report-table caption{text-align:left;padding:9px 12px;font-size:.8rem;color:var(--muted);background:#f5f8fa}
 .report-raw{font-size:.77rem;color:var(--muted);border-top:1px solid var(--line);padding-top:9px;margin-top:15px}
 .report-raw>summary{cursor:pointer}
-.report-snippet{font-size:.81rem;white-space:pre-wrap;padding:10px;margin-top:10px;background:#f4f8f9;overflow-wrap:anywhere}
+.report-snippet{font-size:.81rem;white-space:normal;padding:10px;margin-top:10px;background:#f4f8f9;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .workspace{background:#fff;border:1px solid var(--line);border-radius:8px;padding:20px;margin-top:20px}
 .workspace-heading{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:14px}
 .workspace-heading h2{font-size:1.04rem}

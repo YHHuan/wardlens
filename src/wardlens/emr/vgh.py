@@ -1212,9 +1212,9 @@ class VGHReadOnlyAdapter:
             for table in list(container.find_all("table")):
                 if table.find_parent("table") is None:
                     table.replace_with("\n" + table_to_tsv(table) + "\n")
-            content = container.get_text("\n", strip=True)
+            content = container.get_text("\n", strip=False)
         # Do not collapse TSV separators: they bind dates, results and units.
-        lines = [line.strip() for line in content.splitlines() if line.strip()]
+        lines = [line.strip(" \r\n") for line in content.splitlines() if line.strip()]
         return bounded_source("\n".join(lines), 200000)
 
     @staticmethod

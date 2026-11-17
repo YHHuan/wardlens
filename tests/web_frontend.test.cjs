@@ -178,6 +178,14 @@ test("full-window graphs retain older results and refuse unlike specimens, metho
     assert.deepEqual(ui.validPlotPoints({...row, all_values: [{...observations[0], ...change}, ...observations.slice(1)]}), []);
   }
   assert.deepEqual(ui.validPlotPoints({...row, specimen: "", all_values: [{...observations[0], specimen: "urine"}, ...observations.slice(1)]}), []);
+  for (const [value, numeric] of [["8.2 L", 8.2], ["1,234", 1234], ["8.2 mg/L", 8.2], ["8.2 mg/L H", 8.2], ["1e2 H", 100]]) {
+    const valid = ui.validPlotPoints({...row, all_values: [{...observations[0], value, numeric}, ...observations.slice(1)]});
+    assert.equal(valid.length, 8);
+    assert.equal(valid[0].y, numeric);
+  }
+  for (const [value, numeric] of [[">8.2", 8.2], ["≤ 8.2", 8.2], ["8.2 H", 82], ["1,23", 123], ["8.2 H", Infinity], ["8.2 H", NaN]]) {
+    assert.deepEqual(ui.validPlotPoints({...row, all_values: [{...observations[0], value, numeric}, ...observations.slice(1)]}), []);
+  }
 });
 
 test("all-test search includes rare assays and preserves CBC priority without merging specimens", () => {

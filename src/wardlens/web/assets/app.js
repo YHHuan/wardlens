@@ -28,7 +28,13 @@
       const identities = new Set(observations.map(point => String(point[field] || row[field] || "").trim()));
       if (identities.size > 1) return [];
     }
-    if (observations.some(point => point.value != null && !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(String(point.value).trim()))) return [];
+    if (observations.some(point => {
+      if (point.value == null) return false;
+      // The backend validates clinical suffixes (units and H/L flags). Retain
+      // those labels, but require the numeric prefix to agree with its value.
+      const number = String(point.value).trim().match(/^[+-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?(?=\s|$)/i);
+      return !number || Number(number[0].replace(/,/g, "")) !== point.numeric;
+    })) return [];
     const points = observations.map(point => ({x: Date.parse(point.timestamp || ""), y: point.numeric, observation: point})).sort((a, b) => a.x - b.x);
     if (points.length < 2 || points.some(point => !Number.isFinite(point.x) || typeof point.y !== "number" || !Number.isFinite(point.y))) return [];
     if (points.some((point, index) => index && point.x <= points[index - 1].x)) return [];
